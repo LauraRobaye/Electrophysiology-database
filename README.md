@@ -1,15 +1,16 @@
 # Electrophysiology Database
 
-An interactive Streamlit dashboard designed to analyze and compare neuronal electrophysiological properties across brain regions (focusing on Dorsal Raphe Nucleus at first but expending to all brain regions), supporting data-driven neuroscientific research and the 3Rs ethical framework (Reduction and Refinement).
+An interactive Streamlit dashboard designed to analyze and compare neuronal electrophysiological properties across brain regions (focusing on Dorsal Raphe Nucleus at first but expending to all brain regions), supporting data-driven neuroscientific research, promote *in silico* modeling and the 3Rs ethical framework (Reduction and Refinement).
 
 ---
 
 ## Key Features
 
-* **Interactive PCA / ACP Explorer:** Visualize multidimensional electrophysiological features in a reduced dimensional space to highlight electrophysiological phenotype clusters.
-* **Open Science Dual-Database Architecture:** Implements a strict separation between public reference datasets (literature controls, Allen Brain Institute data) and private, non-published PhD thesis recordings.
-* **Robust Ingestion Pipeline:** Automated script (`append_data.py`) with strict validation to ingest batch CSV files safely into local SQLite databases.
-* **Dynamic Data Merging:** Automatically merges public and local private databases on-the-fly for local analysis while keeping sensitive research data strictly offline during cloud deployment.
+* **Interactive PCA explorer:** Visualize multidimensional electrophysiological features in a reduced dimensional space to highlight electrophysiological phenotype clusters.
+* **Open Science dual-Database architecture:** Implements a strict separation between public reference datasets (literature controls, Allen Brain Institute data) and private, non-published PhD thesis recordings.
+* **Robust ingestion pipeline:** Automated script (`append_data.py`) with strict validation to ingest batch CSV files safely into local SQLite databases.
+* **Dynamic data merging:** Automatically merges public and local private databases on-the-fly for local analysis while keeping sensitive research data strictly offline during cloud deployment.
+* **In silico modeling** Uses data from the litterature to predict the behaviour of *in silico* neurones.
 
 ---
 
