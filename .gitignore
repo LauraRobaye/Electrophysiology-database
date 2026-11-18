@@ -1,0 +1,12 @@
+# Environnement virtuel
+venv/
+
+# Bases de données privées et fichiers temporaires
+data/private_electrophys.db
+data/electrophys_database.db
+data/incoming_batch.csv
+
+# Système
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
