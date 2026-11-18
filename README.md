@@ -10,7 +10,7 @@ An interactive Streamlit dashboard designed to analyze and compare neuronal elec
 * **Open Science dual-Database architecture:** Implements a strict separation between public reference datasets (literature controls, Allen Brain Institute data) and private, non-published PhD thesis recordings.
 * **Robust ingestion pipeline:** Automated script (`append_data.py`) with strict validation to ingest batch CSV files safely into local SQLite databases.
 * **Dynamic data merging:** Automatically merges public and local private databases on-the-fly for local analysis while keeping sensitive research data strictly offline during cloud deployment.
-* **In silico modeling** Uses data from the litterature to predict the behaviour of *in silico* neurones.
+* **In silico modeling:** Uses data from the litterature to predict the behaviour of *in silico* neurones.
 
 ---
 
