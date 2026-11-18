@@ -275,7 +275,7 @@ FEATURE_COLS = [
 # Fonction de chargement et nettoyage des données
 @st.cache_data
 def load_data():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect("data/public_electrophys.db")
     df = pd.read_sql_query("SELECT * FROM neurons_electrophys", conn)
     conn.close()
     
