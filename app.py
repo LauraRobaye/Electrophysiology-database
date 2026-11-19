@@ -79,6 +79,21 @@ LANGUAGES = {
         "t4_success": "Le neurone **{}** a été ajouté avec succès !",
         "t4_rheo": "Rhéobase (pA)", "t4_thr": "Seuil PA (mV)", "t4_amp": "Amplitude PA (mV)",
         "t4_hw": "Demi-largeur PA (ms)", "t4_ahp_amp": "Amplitude AHP (mV)", "t4_ahp_dur": "Durée AHP (ms)",
+        "t4_mode_label": "Action dans cet onglet",
+        "t4_mode_add": "Ajouter un nouveau neurone",
+        "t4_mode_update": "Compléter / mettre à jour un neurone existant",
+        "t4_select_cell": "Sélectionner un neurone existant (cell_id)",
+        "t4_no_cells": "Aucun neurone trouvé dans la base pour la mise à jour.",
+        "t4_update_btn": "Enregistrer les modifications",
+        "t4_update_success": "Neurone '{0}' mis à jour avec succès.",
+        "t4_update_noop": "Aucune modification détectée pour '{0}'.",
+        "t4_morpho_section": "Paramètres morphologiques (optionnels)",
+        "t4_num_branches": "Nombre de branches (num_branches)",
+        "t4_num_junctions": "Nombre de jonctions (num_junctions)",
+        "t4_max_branch_len": "Longueur max. de branche (µm)",
+        "t4_crit_radius": "Rayon critique (µm)",
+        "t4_sholl": "Intersections de Sholl",
+
         # --- Onglet 5 (Modélisation) ---
         "t5_header": "Calibrage & Modélisation In Silico (LIF / Hodgkin-Huxley)",
         "t5_desc": "Extrayez les paramètres biophysiques validés par la littérature (neurones natifs ou systèmes d'expression WT/Mutants) pour construire vos modèles computationnels et réduire le recours à l'expérimentation animale.",
@@ -164,6 +179,20 @@ LANGUAGES = {
         "t4_success": "Neuron **{}** successfully added!",
         "t4_rheo": "Rheobase (pA)", "t4_thr": "AP Threshold (mV)", "t4_amp": "AP Amplitude (mV)",
         "t4_hw": "AP Half-width (ms)", "t4_ahp_amp": "AHP Amplitude (mV)", "t4_ahp_dur": "AHP Duration (ms)",
+        "t4_mode_label": "Action in this tab",
+        "t4_mode_add": "Add a new neuron",
+        "t4_mode_update": "Enrich / update an existing neuron",
+        "t4_select_cell": "Select an existing neuron (cell_id)",
+        "t4_no_cells": "No neurons found in the database to update.",
+        "t4_update_btn": "Save updates",
+        "t4_update_success": "Neuron '{0}' successfully updated.",
+        "t4_update_noop": "No changes detected for '{0}'.",
+        "t4_morpho_section": "Morphological parameters (optional)",
+        "t4_num_branches": "Number of branches (num_branches)",
+        "t4_num_junctions": "Number of junctions (num_junctions)",
+        "t4_max_branch_len": "Max branch length (µm)",
+        "t4_crit_radius": "Critical radius (µm)",
+        "t4_sholl": "Sholl intersections",
         # --- Tab 5 (Modeling) ---
         "t5_header": "In Silico Calibration & Modeling (LIF / Hodgkin-Huxley)",
         "t5_desc": "Extract biophysical parameters validated by literature (native neurons or WT/Mutant expression systems) to build computational models and reduce animal experimentation.",
@@ -854,6 +883,42 @@ with tab3:
 # ==========================================
 # ONGLET 4 : AJOUTER UN NEURONE
 # ==========================================
+def update_existing_neuron(
+    db_path: str,
+    cell_id: str,
+    updates: dict[str, object],
+    table_name: str = "neurons_electrophys",
+) -> int:
+    clean_updates = dict(updates)
+    if "known_identity" in clean_updates and clean_updates["known_identity"] is not None:
+        harmonized = harmonize_identity_value(clean_updates["known_identity"])
+        clean_updates["known_identity"] = harmonized if harmonized else "Unknown"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        existing_cols = {
+            row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        valid_updates = {
+            col: val
+            for col, val in clean_updates.items()
+            if val is not None and col in existing_cols and col != "cell_id"
+        }
+        if not valid_updates:
+            return 0
+
+        set_clause = ", ".join([f"{col} = ?" for col in valid_updates])
+        params = list(valid_updates.values()) + [cell_id]
+        cursor.execute(
+            f"UPDATE {table_name} SET {set_clause} WHERE cell_id = ?",
+            tuple(params),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
 with tab4:
     st.subheader(t["t4_sub"])
     st.markdown(t["t4_desc"])
@@ -861,87 +926,186 @@ with tab4:
     canonical_ids = get_canonical_identities()
     identity_options = ["Unknown"] + canonical_ids
 
-    with st.form("new_neuron_form"):
-        f_col1, f_col2, f_col3 = st.columns(3)
-        with f_col1:
-            new_id = st.text_input(t["t4_id"])
-            new_source = st.selectbox(
-                t["t4_source"],
-                ["Lab_ULiege", "Literature", "Allen_Institute", "Other"],
-            )
-            new_region = st.text_input(t["t4_region"], value="DRN")
-        with f_col2:
-            new_prep = st.selectbox(
-                t["t4_prep"],
-                ["Acute_Slice", "Organotypic_Slice", "Cell_Culture"],
-            )
-            new_age = st.text_input(t["t4_age"], value="DIV7")
-            new_ident = st.selectbox(t["t4_ident"], identity_options)
-        with f_col3:
-            new_rmp = st.number_input("RMP (mV)", value=-60.0)
-            new_tau = st.number_input("Tau (ms)", value=15.0)
-            new_cm = st.number_input("Cm (pF)", value=35.0)
+    mode = st.radio(
+        t["t4_mode_label"],
+        options=[t["t4_mode_add"], t["t4_mode_update"]],
+        horizontal=True,
+        key="t4_mode_radio",
+    )
 
-        f_col4, f_col5 = st.columns(2)
-        with f_col4:
-            new_rheo = st.number_input(t["t4_rheo"], value=40.0)
-            new_thr = st.number_input(t["t4_thr"], value=-40.0)
-            new_amp = st.number_input(t["t4_amp"], value=75.0)
-        with f_col5:
-            new_hw = st.number_input(t["t4_hw"], value=1.2)
-            new_ahp_amp = st.number_input(t["t4_ahp_amp"], value=10.0)
-            new_ahp_dur = st.number_input(t["t4_ahp_dur"], value=40.0)
-
-        submitted = st.form_submit_button(t["t4_btn"])
-
-        if submitted:
-            clean_id = new_id.strip()
-            if not clean_id:
-                st.error(t["t4_err_id"])
-            else:
-                if new_ident == "Unknown":
-                    final_ident = "Unknown"
-                else:
-                    harmonized = harmonize_identity_value(new_ident)
-                    final_ident = harmonized if harmonized else "Unknown"
-
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO neurons_electrophys VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-                    )
-                    """,
-                    (
-                        clean_id,
-                        new_source,
-                        new_region.strip() or "DRN",
-                        new_prep,
-                        new_age.strip() or "Unknown",
-                        final_ident,
-                        new_rmp,
-                        new_tau,
-                        new_cm,
-                        new_rheo,
-                        new_thr,
-                        new_amp,
-                        new_hw,
-                        new_ahp_amp,
-                        new_ahp_dur,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
+    if mode == t["t4_mode_add"]:
+        with st.form("new_neuron_form"):
+            f_col1, f_col2, f_col3 = st.columns(3)
+            with f_col1:
+                new_id = st.text_input(t["t4_id"])
+                new_source = st.selectbox(
+                    t["t4_source"],
+                    ["Lab_ULiege", "Literature", "Allen_Institute", "Other"],
                 )
-                conn.commit()
-                conn.close()
-                st.cache_data.clear()
-                st.success(t["t4_success"].format(clean_id))
+                new_region = st.text_input(t["t4_region"], value="DRN")
+            with f_col2:
+                new_prep = st.selectbox(
+                    t["t4_prep"],
+                    ["Acute_Slice", "Organotypic_Slice", "Cell_Culture"],
+                )
+                new_age = st.text_input(t["t4_age"], value="DIV7")
+                new_ident = st.selectbox(t["t4_ident"], identity_options)
+            with f_col3:
+                new_rmp = st.number_input("RMP (mV)", value=-60.0)
+                new_tau = st.number_input("Tau (ms)", value=15.0)
+                new_cm = st.number_input("Cm (pF)", value=35.0)
+
+            f_col4, f_col5 = st.columns(2)
+            with f_col4:
+                new_rheo = st.number_input(t["t4_rheo"], value=40.0)
+                new_thr = st.number_input(t["t4_thr"], value=-40.0)
+                new_amp = st.number_input(t["t4_amp"], value=75.0)
+            with f_col5:
+                new_hw = st.number_input(t["t4_hw"], value=1.2)
+                new_ahp_amp = st.number_input(t["t4_ahp_amp"], value=10.0)
+                new_ahp_dur = st.number_input(t["t4_ahp_dur"], value=40.0)
+
+            submitted = st.form_submit_button(t["t4_btn"])
+
+            if submitted:
+                clean_id = new_id.strip()
+                if not clean_id:
+                    st.error(t["t4_err_id"])
+                else:
+                    if new_ident == "Unknown":
+                        final_ident = "Unknown"
+                    else:
+                        harmonized = harmonize_identity_value(new_ident)
+                        final_ident = harmonized if harmonized else "Unknown"
+
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO neurons_electrophys VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+                        )
+                        """,
+                        (
+                            clean_id,
+                            new_source,
+                            new_region.strip() or "DRN",
+                            new_prep,
+                            new_age.strip() or "Unknown",
+                            final_ident,
+                            new_rmp,
+                            new_tau,
+                            new_cm,
+                            new_rheo,
+                            new_thr,
+                            new_amp,
+                            new_hw,
+                            new_ahp_amp,
+                            new_ahp_dur,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.cache_data.clear()
+                    st.success(t["t4_success"].format(clean_id))
+
+    else:
+        if df.empty or "cell_id" not in df.columns:
+            st.info(t["t4_no_cells"])
+        else:
+            cell_ids = df["cell_id"].dropna().astype(str).unique().tolist()
+            selected_cell = st.selectbox(
+                t["t4_select_cell"],
+                options=cell_ids,
+                key="t4_update_cell_select",
+            )
+            current_row = df[df["cell_id"].astype(str) == selected_cell].iloc[0]
+
+            current_harm = harmonize_identity_value(current_row.get("known_identity"))
+            default_ident = current_harm if current_harm in canonical_ids else "Unknown"
+            ident_idx = identity_options.index(default_ident)
+
+            with st.form(f"update_neuron_form_{selected_cell}"):
+                u1, u2 = st.columns(2)
+                with u1:
+                    upd_ident = st.selectbox(
+                        t["t4_ident"],
+                        options=identity_options,
+                        index=ident_idx,
+                    )
+                    upd_age = st.text_input(
+                        t["t4_age"],
+                        value="" if pd.isna(current_row.get("age_or_div")) else str(current_row.get("age_or_div")),
+                    )
+                with u2:
+                    upd_rheo_txt = st.text_input(
+                        t["t4_rheo"],
+                        value="" if pd.isna(current_row.get("rheobase_pa")) else str(current_row.get("rheobase_pa")),
+                    )
+
+                st.markdown(f"**{t['t4_morpho_section']}**")
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    upd_branches_txt = st.text_input(
+                        t["t4_num_branches"],
+                        value="" if pd.isna(current_row.get("num_branches")) else str(current_row.get("num_branches")),
+                    )
+                    upd_junctions_txt = st.text_input(
+                        t["t4_num_junctions"],
+                        value="" if pd.isna(current_row.get("num_junctions")) else str(current_row.get("num_junctions")),
+                    )
+                with m2:
+                    upd_maxlen_txt = st.text_input(
+                        t["t4_max_branch_len"],
+                        value="" if pd.isna(current_row.get("max_branch_length_um")) else str(current_row.get("max_branch_length_um")),
+                    )
+                    upd_critrad_txt = st.text_input(
+                        t["t4_crit_radius"],
+                        value="" if pd.isna(current_row.get("critical_radius_um")) else str(current_row.get("critical_radius_um")),
+                    )
+                with m3:
+                    upd_sholl_txt = st.text_input(
+                        t["t4_sholl"],
+                        value="" if pd.isna(current_row.get("sholl_intersections")) else str(current_row.get("sholl_intersections")),
+                    )
+
+                upd_submitted = st.form_submit_button(t["t4_update_btn"])
+
+                if upd_submitted:
+                    def _to_float_or_none(val: str) -> float | None:
+                        s = val.strip()
+                        if not s:
+                            return None
+                        return float(s.replace(",", "."))
+
+                    payload: dict[str, object] = {
+                        "known_identity": upd_ident,
+                        "age_or_div": upd_age.strip() if upd_age.strip() else None,
+                        "rheobase_pa": _to_float_or_none(upd_rheo_txt),
+                        "num_branches": _to_float_or_none(upd_branches_txt),
+                        "num_junctions": _to_float_or_none(upd_junctions_txt),
+                        "max_branch_length_um": _to_float_or_none(upd_maxlen_txt),
+                        "critical_radius_um": _to_float_or_none(upd_critrad_txt),
+                        "sholl_intersections": _to_float_or_none(upd_sholl_txt),
+                    }
+
+                    rows_updated = update_existing_neuron(
+                        db_path=DB_PATH,
+                        cell_id=selected_cell,
+                        updates=payload,
+                    )
+                    st.cache_data.clear()
+                    if rows_updated > 0:
+                        st.success(t["t4_update_success"].format(selected_cell))
+                    else:
+                        st.info(t["t4_update_noop"].format(selected_cell))
 
 # ==========================================
 # ONGLET 5 : MODÉLISATION IN SILICO

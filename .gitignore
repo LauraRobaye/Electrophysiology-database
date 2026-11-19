@@ -6,6 +6,8 @@ data/private_electrophys.db
 data/electrophys_database.db
 data/incoming_batch.csv
 
+.streamlit/secrets.toml
+
 # Système
 .DS_Store
 __pycache__/
