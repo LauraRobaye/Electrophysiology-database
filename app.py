@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import psycopg
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -363,18 +364,51 @@ FEATURE_COLS = [
 ]
 
 # Fonction de chargement et nettoyage des données
-@st.cache_data
+DB_PATH = "data/electrophys_database.db"
+PUBLIC_DB_PATH = "data/public_electrophys.db"
+
+FEATURE_COLS = [
+    'rmp_mv', 'tau_ms', 'cm_pf',
+    'rheobase_pa', 'ap_threshold_mv', 'ap_amplitude_mv',
+    'ap_half_width_ms', 'ahp_amplitude_mv', 'ahp_duration_ms'
+]
+
+
+def _get_supabase_url() -> str | None:
+    try:
+        url = st.secrets.get("SUPABASE_DB_URL", "")
+        return url.strip() if url else None
+    except Exception:
+        return None
+
+
+# Fonction de chargement et nettoyage des données
+@st.cache_data(ttl=60)
 def load_data():
-    conn = sqlite3.connect("data/public_electrophys.db")
-    df = pd.read_sql_query("SELECT * FROM neurons_electrophys", conn)
-    conn.close()
-    
+    db_url = _get_supabase_url()
+    df = None
+
+    if db_url:
+        try:
+            with psycopg.connect(db_url, connect_timeout=5) as conn:
+                df = pd.read_sql_query("SELECT * FROM neurons_electrophys", conn)
+        except Exception as exc:
+            st.warning(f"Lecture Supabase indisponible ({exc}), repli sur SQLite local.")
+
+    if df is None:
+        conn = sqlite3.connect(PUBLIC_DB_PATH)
+        try:
+            df = pd.read_sql_query("SELECT * FROM neurons_electrophys", conn)
+        finally:
+            conn.close()
+
     for col in FEATURE_COLS:
         if col in df.columns:
             if df[col].dtype == object:
                 df[col] = df[col].astype(str).str.replace(',', '.', regex=False)
             df[col] = pd.to_numeric(df[col], errors='coerce')
     return df
+
 
 df = load_data()
 
@@ -883,6 +917,18 @@ with tab3:
 # ==========================================
 # ONGLET 4 : AJOUTER UN NEURONE
 # ==========================================
+def _get_pg_columns(pg_conn, table_name: str) -> set[str]:
+    rows = pg_conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table_name,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def update_existing_neuron(
     db_path: str,
     cell_id: str,
@@ -893,6 +939,30 @@ def update_existing_neuron(
     if "known_identity" in clean_updates and clean_updates["known_identity"] is not None:
         harmonized = harmonize_identity_value(clean_updates["known_identity"])
         clean_updates["known_identity"] = harmonized if harmonized else "Unknown"
+
+    db_url = _get_supabase_url()
+    if db_url:
+        try:
+            with psycopg.connect(db_url, connect_timeout=5) as pg_conn:
+                existing_cols = _get_pg_columns(pg_conn, table_name)
+                valid_updates = {
+                    col: val
+                    for col, val in clean_updates.items()
+                    if val is not None and col in existing_cols and col != "cell_id"
+                }
+                if not valid_updates:
+                    return 0
+
+                set_clause = ", ".join([f"{col} = %s" for col in valid_updates])
+                params = list(valid_updates.values()) + [cell_id]
+                cur = pg_conn.execute(
+                    f"UPDATE {table_name} SET {set_clause} WHERE cell_id = %s",
+                    tuple(params),
+                )
+                pg_conn.commit()
+                return cur.rowcount
+        except Exception as exc:
+            st.warning(f"Mise à jour Supabase indisponible ({exc}), repli sur SQLite local.")
 
     conn = sqlite3.connect(db_path)
     try:
@@ -919,6 +989,42 @@ def update_existing_neuron(
     finally:
         conn.close()
 
+
+def insert_new_neuron(
+    db_path: str,
+    values: tuple,
+    table_name: str = "neurons_electrophys",
+) -> None:
+    placeholders_pg = ", ".join(["%s"] * len(values))
+    placeholders_sqlite = ", ".join(["?"] * len(values))
+
+    db_url = _get_supabase_url()
+    if db_url:
+        try:
+            with psycopg.connect(db_url, connect_timeout=5) as pg_conn:
+                pg_conn.execute(
+                    f"""
+                    INSERT INTO {table_name} VALUES ({placeholders_pg})
+                    ON CONFLICT (cell_id) DO NOTHING
+                    """,
+                    values,
+                )
+                pg_conn.commit()
+                return
+        except Exception as exc:
+            st.warning(f"Ajout Supabase indisponible ({exc}), repli sur SQLite local.")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"INSERT OR IGNORE INTO {table_name} VALUES ({placeholders_sqlite})",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+  
 with tab4:
     st.subheader(t["t4_sub"])
     st.markdown(t["t4_desc"])
@@ -978,41 +1084,34 @@ with tab4:
                         harmonized = harmonize_identity_value(new_ident)
                         final_ident = harmonized if harmonized else "Unknown"
 
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT OR IGNORE INTO neurons_electrophys VALUES (
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-                        )
-                        """,
-                        (
-                            clean_id,
-                            new_source,
-                            new_region.strip() or "DRN",
-                            new_prep,
-                            new_age.strip() or "Unknown",
-                            final_ident,
-                            new_rmp,
-                            new_tau,
-                            new_cm,
-                            new_rheo,
-                            new_thr,
-                            new_amp,
-                            new_hw,
-                            new_ahp_amp,
-                            new_ahp_dur,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
+                    neuron_values = (
+                        clean_id,
+                        new_source,
+                        new_region.strip() or "DRN",
+                        new_prep,
+                        new_age.strip() or "Unknown",
+                        final_ident,
+                        new_rmp,
+                        new_tau,
+                        new_cm,
+                        new_rheo,
+                        new_thr,
+                        new_amp,
+                        new_hw,
+                        new_ahp_amp,
+                        new_ahp_dur,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
                     )
-                    conn.commit()
-                    conn.close()
+                    insert_new_neuron(db_path=DB_PATH, values=neuron_values)
+                    st.cache_data.clear()
+                    st.success(t["t4_success"].format(clean_id))
+                    
                     st.cache_data.clear()
                     st.success(t["t4_success"].format(clean_id))
 
