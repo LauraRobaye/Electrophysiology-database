@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -7,6 +9,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+
+from identity import (
+    get_canonical_identities,
+    harmonize_identity_series,
+    harmonize_identity_value,
+)
 
 # ==========================================
 # DICTIONNAIRE DE TRADUCTION (FR / EN)
@@ -50,6 +58,13 @@ LANGUAGES = {
         "t3_rmp": "RMP (mV)", "t3_tau": "Tau (ms)", "t3_cm": "Capacitance Cm (pF)",
         "t3_rheo": "Rhéobase (pA)", "t3_thr": "Seuil du PA (mV)", "t3_amp": "Amplitude du PA (mV)",
         "t3_hw": "Demi-largeur PA (ms)", "t3_ahp_amp": "Amplitude AHP (mV)", "t3_ahp_dur": "Durée AHP (ms)",
+        "t3_conf": "Confiance",
+        "t3_proba_chart": "Probabilités par classe prédite (%)",
+        "t3_feat_imp": "Importance des variables dans le modèle",
+        "t3_class_col": "Classe",
+        "t3_proba_col": "Probabilité (%)",
+        "t3_feat_col": "Paramètre",
+        "t3_imp_col": "Importance",
         # --- Onglet 4 ---
         "t4_sub": "Encoder un nouvel enregistrement",
         "t4_desc": "Injection directe d'une cellule dans la base de données SQLite locale.",
@@ -128,6 +143,13 @@ LANGUAGES = {
         "t3_rmp": "RMP (mV)", "t3_tau": "Tau (ms)", "t3_cm": "Capacitance Cm (pF)",
         "t3_rheo": "Rheobase (pA)", "t3_thr": "AP Threshold (mV)", "t3_amp": "AP Amplitude (mV)",
         "t3_hw": "AP Half-width (ms)", "t3_ahp_amp": "AHP Amplitude (mV)", "t3_ahp_dur": "AHP Duration (ms)",
+        "t3_conf": "Confidence",
+        "t3_proba_chart": "Predicted probability per class (%)",
+        "t3_feat_imp": "Feature importance in the model",
+        "t3_class_col": "Class",
+        "t3_proba_col": "Probability (%)",
+        "t3_feat_col": "Feature",
+        "t3_imp_col": "Importance",
         # --- Tab 4 ---
         "t4_sub": "Encode a New Recording",
         "t4_desc": "Direct injection of a cell into the local SQLite database.",
@@ -169,6 +191,45 @@ LANGUAGES = {
         "t5_dl_json": "Download JSON / NeuroML Profile (.json)", 
     }
 }
+RF_TRANSLATIONS = {
+    "fr": {
+        "rf_title": "Classification neuronale multi-classe (Random Forest)",
+        "rf_subtitle": "Entraînement dynamique sur les neurones étiquetés avec estimation de confiance par classe.",
+        "min_samples_warning": "Il faut au moins 2 classes distinctes et suffisamment d'exemples étiquetés pour entraîner le modèle multi-classe.",
+        "n_estimators_label": "Nombre d'arbres (n_estimators)",
+        "train_n_caption": "Neurones d'entraînement retenus après harmonisation : n = {n} ({classes})",
+        "target_neuron_select": "Sélectionner un neurone à prédire",
+        "predicted_class_label": "Identité prédite",
+        "confidence_label": "Score de confiance (probabilité max)",
+        "proba_chart_title": "Distribution des probabilités prédites par classe",
+        "feature_imp_title": "Importance des variables électrophysiologiques / morphologiques",
+        "feature_col": "Variable",
+        "importance_col": "Importance relative",
+        "proba_col": "Probabilité",
+        "class_col": "Identité canonique",
+        "input_identity_label": "Identité connue (normalisée automatiquement)",
+        "input_custom_identity": "Ou saisir une autre étiquette (sera harmonisée)",
+    },
+    "en": {
+        "rf_title": "Multi-Class Neuronal Classification (Random Forest)",
+        "rf_subtitle": "Dynamic training on labeled neurons with class-level confidence estimation.",
+        "min_samples_warning": "At least 2 distinct classes and enough labeled examples are required to train the multi-class model.",
+        "n_estimators_label": "Number of trees (n_estimators)",
+        "train_n_caption": "Training neurons kept after harmonization: n = {n} ({classes})",
+        "target_neuron_select": "Select a neuron to predict",
+        "predicted_class_label": "Predicted identity",
+        "confidence_label": "Confidence score (max probability)",
+        "proba_chart_title": "Predicted Probability Distribution by Class",
+        "feature_imp_title": "Electrophysiological / Morphological Feature Importance",
+        "feature_col": "Feature",
+        "importance_col": "Relative importance",
+        "proba_col": "Probability",
+        "class_col": "Canonical identity",
+        "input_identity_label": "Known identity (auto-harmonized)",
+        "input_custom_identity": "Or enter another label (will be harmonized)",
+    },
+}
+
 
 # Configuration de la page
 st.set_page_config(
@@ -690,19 +751,27 @@ with tab2:
 with tab3:
     st.subheader(t["t3_sub"])
     st.markdown(t["t3_desc"])
-    
-    df_train = df[df['known_identity'].isin(['Serotonin', 'Non_serotonin'])].copy()
-    
-    if len(df_train) < 10:
+
+    df_work = df.copy()
+    df_work["identity_clean"] = harmonize_identity_series(df_work["known_identity"])
+    df_train = df_work.dropna(subset=["identity_clean"]).copy()
+
+    n_classes = df_train["identity_clean"].nunique()
+
+    if len(df_train) < 4 or n_classes < 2:
         st.error(t["t3_err"])
     else:
-        imputer_rf = SimpleImputer(strategy='median')
+        imputer_rf = SimpleImputer(strategy="median")
         X_train = imputer_rf.fit_transform(df_train[FEATURE_COLS])
-        y_train = df_train['known_identity']
-        
-        rf = RandomForestClassifier(n_estimators=100, random_state=42)
+        y_train = df_train["identity_clean"]
+
+        rf = RandomForestClassifier(
+            n_estimators=200,
+            random_state=42,
+            class_weight="balanced",
+        )
         rf.fit(X_train, y_train)
-        
+
         c1, c2, c3 = st.columns(3)
         with c1:
             rmp = st.number_input(t["t3_rmp"], value=-62.0, step=1.0, key="rf_rmp")
@@ -716,24 +785,62 @@ with tab3:
             hw = st.number_input(t["t3_hw"], value=1.4, step=0.1, key="rf_hw")
             ahp_amp = st.number_input(t["t3_ahp_amp"], value=11.0, step=0.5, key="rf_ahp_amp")
             ahp_dur = st.number_input(t["t3_ahp_dur"], value=45.0, step=2.0, key="rf_ahp_dur")
-            
-        input_data = np.array([[rmp, tau, cm, rheo, thr, amp, hw, ahp_amp, ahp_dur]])
-        proba = rf.predict_proba(input_data)[0]
+
+        input_df = pd.DataFrame(
+            [[rmp, tau, cm, rheo, thr, amp, hw, ahp_amp, ahp_dur]],
+            columns=FEATURE_COLS,
+        )
+        X_input = imputer_rf.transform(input_df)
+
+        proba = rf.predict_proba(X_input)[0]
         classes = list(rf.classes_)
-        
-        idx_5ht = classes.index('Serotonin')
-        prob_5ht = proba[idx_5ht] * 100
-        
+        best_idx = int(np.argmax(proba))
+        prediction_label = classes[best_idx]
+        confidence_pct = float(proba[best_idx]) * 100.0
+
         st.markdown("---")
         res_col1, res_col2 = st.columns(2)
-        prediction_label = "Serotonin" if prob_5ht >= 50 else "Non_serotonin"
         res_col1.success(f"### {t['t3_pred']} : **{prediction_label}**")
-        res_col2.info(f"### {t['t3_prob']} : **{prob_5ht:.1f} %**")
+        res_col2.info(f"### {t['t3_conf']} : **{confidence_pct:.1f} %**")
+
+        # Graphique des probabilités pour toutes les classes connues
+        proba_df = pd.DataFrame({
+            t["t3_class_col"]: classes,
+            t["t3_proba_col"]: np.round(proba * 100.0, 1),
+        }).sort_values(by=t["t3_proba_col"], ascending=False)
+
+        fig_proba = px.bar(
+            proba_df,
+            x=t["t3_class_col"],
+            y=t["t3_proba_col"],
+            title=t["t3_proba_chart"],
+        )
+        fig_proba.update_layout(yaxis_range=[0, 100])
+        st.plotly_chart(fig_proba, use_container_width=True)
+
+        # Importance des variables
+        imp_df = pd.DataFrame({
+            t["t3_feat_col"]: FEATURE_COLS,
+            t["t3_imp_col"]: rf.feature_importances_,
+        }).sort_values(by=t["t3_imp_col"], ascending=True)
+
+        fig_imp = px.bar(
+            imp_df,
+            x=t["t3_imp_col"],
+            y=t["t3_feat_col"],
+            orientation="h",
+            title=t["t3_feat_imp"],
+        )
+        st.plotly_chart(fig_imp, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander(t["t3_exp"]):
+            class_summary = ", ".join(
+                [f"{k} (n={v})" for k, v in y_train.value_counts().items()]
+            )
             st.markdown(
                 f"Ce modèle est entraîné sur **{len(df_train)} neurones de référence** "
+                f"[{class_summary}] "
                 f"(sources : {', '.join(map(str, df_train['source'].dropna().unique().tolist()))})."
             )
             if "doi" in df_train.columns:
@@ -750,22 +857,31 @@ with tab3:
 with tab4:
     st.subheader(t["t4_sub"])
     st.markdown(t["t4_desc"])
-    
+
+    canonical_ids = get_canonical_identities()
+    identity_options = ["Unknown"] + canonical_ids
+
     with st.form("new_neuron_form"):
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
             new_id = st.text_input(t["t4_id"])
-            new_source = st.selectbox(t["t4_source"], ["Lab_ULiege", "Literature", "Allen_Institute", "Other"])
+            new_source = st.selectbox(
+                t["t4_source"],
+                ["Lab_ULiege", "Literature", "Allen_Institute", "Other"],
+            )
             new_region = st.text_input(t["t4_region"], value="DRN")
         with f_col2:
-            new_prep = st.selectbox(t["t4_prep"], ["Acute_Slice", "Organotypic_Slice", "Cell_Culture"])
+            new_prep = st.selectbox(
+                t["t4_prep"],
+                ["Acute_Slice", "Organotypic_Slice", "Cell_Culture"],
+            )
             new_age = st.text_input(t["t4_age"], value="DIV7")
-            new_ident = st.selectbox(t["t4_ident"], ["Unknown", "Serotonin", "Non_serotonin"])
+            new_ident = st.selectbox(t["t4_ident"], identity_options)
         with f_col3:
             new_rmp = st.number_input("RMP (mV)", value=-60.0)
             new_tau = st.number_input("Tau (ms)", value=15.0)
             new_cm = st.number_input("Cm (pF)", value=35.0)
-            
+
         f_col4, f_col5 = st.columns(2)
         with f_col4:
             new_rheo = st.number_input(t["t4_rheo"], value=40.0)
@@ -775,25 +891,57 @@ with tab4:
             new_hw = st.number_input(t["t4_hw"], value=1.2)
             new_ahp_amp = st.number_input(t["t4_ahp_amp"], value=10.0)
             new_ahp_dur = st.number_input(t["t4_ahp_dur"], value=40.0)
-            
+
         submitted = st.form_submit_button(t["t4_btn"])
-        
+
         if submitted:
-            if not new_id:
+            clean_id = new_id.strip()
+            if not clean_id:
                 st.error(t["t4_err_id"])
             else:
+                if new_ident == "Unknown":
+                    final_ident = "Unknown"
+                else:
+                    harmonized = harmonize_identity_value(new_ident)
+                    final_ident = harmonized if harmonized else "Unknown"
+
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT OR IGNORE INTO neurons_electrophys VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL
                     )
-                """, (new_id, new_source, new_region, new_prep, new_age, new_ident,
-                      new_rmp, new_tau, new_cm, new_rheo, new_thr, new_amp, new_hw, new_ahp_amp, new_ahp_dur, None, None, None, None, None, None, None))
+                    """,
+                    (
+                        clean_id,
+                        new_source,
+                        new_region.strip() or "DRN",
+                        new_prep,
+                        new_age.strip() or "Unknown",
+                        final_ident,
+                        new_rmp,
+                        new_tau,
+                        new_cm,
+                        new_rheo,
+                        new_thr,
+                        new_amp,
+                        new_hw,
+                        new_ahp_amp,
+                        new_ahp_dur,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                )
                 conn.commit()
                 conn.close()
                 st.cache_data.clear()
-                st.success(t["t4_success"].format(new_id))
+                st.success(t["t4_success"].format(clean_id))
 
 # ==========================================
 # ONGLET 5 : MODÉLISATION IN SILICO

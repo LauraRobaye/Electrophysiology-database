@@ -1,3 +1,15 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import pandas as pd
+from identity import harmonize_identity_series
+
 import sqlite3
 import pandas as pd
 import os
@@ -32,13 +44,9 @@ def import_existing_csv(csv_path="data/Table_ACP.csv", db_path="data/electrophys
         age_or_div = str(row.get('Age_DIV', 'Unknown'))
         
         # Normalisation de l'identité
-        raw_id = str(row.get('Identity', row.get('Identite', 'Unknown'))).strip()
-        if 'serotonin' in raw_id.lower() and 'non' not in raw_id.lower():
-            known_identity = 'Serotonin'
-        elif 'non' in raw_id.lower():
-            known_identity = 'Non_serotonin'
-        else:
-            known_identity = 'Unknown'
+        raw_id = row.get('Identity', row.get('Identite', row.get('known_identity', 'Unknown')))
+        harmonized_id = harmonize_identity_value(raw_id)
+        known_identity = harmonized_id if harmonized_id else 'Unknown'
             
         sex = str(row.get('Sex', 'Unknown'))
 
