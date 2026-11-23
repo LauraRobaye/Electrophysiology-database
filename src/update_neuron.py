@@ -11,6 +11,18 @@ if str(ROOT_DIR) not in sys.path:
 
 from identity import harmonize_identity_value
 
+def to_sd(
+    value: float | None,
+    dispersion_type: str | None,
+    n_cells: int | None,
+) -> float | None:
+    """Convertit une dispersion rapportée (SD ou SEM) en écart type (SD)."""
+    if value is None:
+        return None
+    disp = (dispersion_type or "SD").strip().upper()
+    if disp == "SEM" and n_cells is not None and n_cells > 0:
+        return float(value) * math.sqrt(n_cells)
+    return float(value)
 
 def update_neuron(
     cell_id: str,

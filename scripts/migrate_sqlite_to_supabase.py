@@ -14,6 +14,18 @@ if str(ROOT_DIR) not in sys.path:
 from identity import harmonize_identity_value
 
 
+def _get_pg_columns(pg_conn: psycopg.Connection, table_name: str = "neurons_electrophys") -> set[str]:
+    rows = pg_conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table_name,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def migrate_public_db(sqlite_path: str = "data/public_electrophys.db") -> None:
     db_url = st.secrets.get("SUPABASE_DB_URL", "").strip()
     if not db_url:
@@ -26,39 +38,50 @@ def migrate_public_db(sqlite_path: str = "data/public_electrophys.db") -> None:
         if not rows:
             print("Aucune ligne à migrer.")
             return
-        columns = list(rows[0].keys())
+        sqlite_columns = list(rows[0].keys())
     finally:
         src_conn.close()
 
-    id_idx = columns.index("known_identity") if "known_identity" in columns else None
-
-    prepared_rows = []
-    for r in rows:
-        vals = [r[col] for col in columns]
-        if id_idx is not None and vals[id_idx] is not None:
-            harm = harmonize_identity_value(vals[id_idx])
-            vals[id_idx] = harm if harm else "Unknown"
-        prepared_rows.append(tuple(vals))
-
-    col_list = ", ".join(columns)
-    placeholders = ", ".join(["%s"] * len(columns))
-    update_assignments = ", ".join(
-        [f"{col} = EXCLUDED.{col}" for col in columns if col != "cell_id"]
-    )
-
-    sql = f"""
-        INSERT INTO neurons_electrophys ({col_list})
-        VALUES ({placeholders})
-        ON CONFLICT (cell_id) DO UPDATE SET
-            {update_assignments}
-    """
-
     with psycopg.connect(db_url) as pg_conn:
+        pg_columns = _get_pg_columns(pg_conn, "neurons_electrophys")
+        columns = [col for col in sqlite_columns if col in pg_columns]
+        if not columns:
+            raise ValueError("Aucune colonne commune entre SQLite et Supabase.")
+
+        id_idx = columns.index("known_identity") if "known_identity" in columns else None
+        rec_type_idx = columns.index("record_type") if "record_type" in columns else None
+
+        prepared_rows = []
+        for r in rows:
+            vals = [r[col] for col in columns]
+            if id_idx is not None and vals[id_idx] is not None:
+                harm = harmonize_identity_value(vals[id_idx])
+                vals[id_idx] = harm if harm else "Unknown"
+            if rec_type_idx is not None and vals[rec_type_idx] is None:
+                vals[rec_type_idx] = "single_cell"
+            prepared_rows.append(tuple(vals))
+
+        col_list = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        update_assignments = ", ".join(
+            [f"{col} = EXCLUDED.{col}" for col in columns if col != "cell_id"]
+        )
+
+        sql = f"""
+            INSERT INTO neurons_electrophys ({col_list})
+            VALUES ({placeholders})
+            ON CONFLICT (cell_id) DO UPDATE SET
+                {update_assignments}
+        """
+
         with pg_conn.cursor() as cur:
             cur.executemany(sql, prepared_rows)
         pg_conn.commit()
 
-    print(f"Migration terminée : {len(prepared_rows)} neurone(s) synchronisé(s) vers Supabase.")
+    print(
+        f"Migration terminée : {len(prepared_rows)} entrée(s) synchronisée(s) vers Supabase "
+        f"({len(columns)} colonnes)."
+    )
 
 
 if __name__ == "__main__":
