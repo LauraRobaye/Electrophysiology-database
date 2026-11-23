@@ -6,6 +6,15 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import psycopg
+import json
+from src.update_neuron import to_sd
+from src.ml_pipeline import (
+    FEATURE_COLS,
+    build_classifier,
+    compute_literature_zscores,
+    evaluate_cv,
+    prepare_single_cell_data,
+)
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -66,6 +75,21 @@ LANGUAGES = {
         "t3_proba_col": "Probabilité (%)",
         "t3_feat_col": "Paramètre",
         "t3_imp_col": "Importance",
+        "t3_n_single": "n single-cell",
+        "t3_f1_cv": "F1 macro (CV)",
+        "t3_z_title": "Z-scores vs littérature (`group_summary`)",
+        "t3_z_empty": "Aucun profil `group_summary` disponible dans la base pour le moment.",
+        "t3_z_chart_title": "Écarts aux profils de littérature (seuils ±2 SD)",
+        "t3_z_axis_x": "z-score (SD)",
+        "t3_z_status": "Écart",
+        "t3_z_out": "|z| > 2 SD",
+        "t3_z_in": "Dans ±2 SD",
+        "t3_z_dl": "Télécharger les z-scores (.csv)",
+        "t3_col_id": "Identité",
+        "t3_col_prob": "Probabilité",
+        "t3_col_param": "Paramètre",
+        "t3_col_profile": "Profil",
+        "t3_col_pp": "Profil / Paramètre",
         # --- Onglet 4 ---
         "t4_sub": "Encoder un nouvel enregistrement",
         "t4_desc": "Injection directe d'une cellule dans la base de données SQLite locale.",
@@ -166,6 +190,21 @@ LANGUAGES = {
         "t3_proba_col": "Probability (%)",
         "t3_feat_col": "Feature",
         "t3_imp_col": "Importance",
+        "t3_n_single": "n single-cell",
+        "t3_f1_cv": "Macro F1 (CV)",
+        "t3_z_title": "Z-scores vs literature (`group_summary`)",
+        "t3_z_empty": "No `group_summary` profile available in the database yet.",
+        "t3_z_chart_title": "Deviations from literature profiles (±2 SD thresholds)",
+        "t3_z_axis_x": "z-score (SD)",
+        "t3_z_status": "Deviation",
+        "t3_z_out": "|z| > 2 SD",
+        "t3_z_in": "Within ±2 SD",
+        "t3_z_dl": "Download z-scores (.csv)",
+        "t3_col_id": "Identity",
+        "t3_col_prob": "Probability",
+        "t3_col_param": "Parameter",
+        "t3_col_profile": "Profile",
+        "t3_col_pp": "Profile / Parameter",
         # --- Tab 4 ---
         "t4_sub": "Encode a New Recording",
         "t4_desc": "Direct injection of a cell into the local SQLite database.",
@@ -412,6 +451,36 @@ def load_data():
 
 df = load_data()
 
+# --- Fonctions utilistaires, helpers ---
+@st.cache_resource(show_spinner=False)
+def _fit_cached_classifier(
+    df_fingerprint: tuple[tuple[str, object], ...],
+    X_records: list[dict[str, float | None]],
+    y_values: list[str],
+):
+    X_df = pd.DataFrame(X_records)
+    y_ser = pd.Series(y_values)
+    model = build_classifier()
+    model.fit(X_df, y_ser)
+    return model
+
+
+def get_trained_model(df):
+    X, y = prepare_single_cell_data(df)
+    class_counts = y.value_counts()
+    if len(y) < 4 or len(class_counts) < 2:
+        return None, None, X, y
+
+    fingerprint = tuple(
+        (col, float(X[col].sum(skipna=True))) for col in X.columns
+    ) + (("n_rows", len(y)),)
+    model = _fit_cached_classifier(
+        fingerprint,
+        X.to_dict(orient="records"),
+        y.tolist(),
+    )
+    return model, class_counts, X, y
+
 # --- BARRE LATÉRALE (FILTRES GLOBAUX) ---
 lang_choice = st.sidebar.selectbox("Langue / Language", ["Français", "English"])
 t = LANGUAGES[lang_choice]  # 't' contient tous les textes de la langue choisie
@@ -450,7 +519,6 @@ st.markdown("---")
 # ==========================================
 # FONCTION : VOLET MODÉLISATION IN SILICO
 # ==========================================
-import json
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -459,6 +527,7 @@ import plotly.express as px
 def render_modeling_tab(df, t):
     st.header(t["t5_header"])
     st.markdown(t["t5_desc"])
+    st.caption("DEBUG: onglet modélisation in silico uniquement")
 
     # --- 1. FILTRES BIOLOGIQUES & BIOPHYSIQUES ---
     col1, col2, col3 = st.columns(3)
@@ -514,7 +583,11 @@ def render_modeling_tab(df, t):
         if col in sub_df.columns and not sub_df[col].dropna().empty:
             vals = pd.to_numeric(sub_df[col], errors="coerce").dropna()
             if not vals.empty:
-                return round(float(vals.median()), 2), round(float(vals.std()), 2)
+                med = round(float(vals.median()), 2)
+                sd = round(float(vals.std()), 2) if len(vals) > 1 else None
+                if sd is not None and np.isnan(sd):
+                    sd = None
+                return med, sd
         return None, None
 
     rmp, rmp_sd = get_median_std("rmp_mv")
@@ -729,6 +802,7 @@ hh_channel_config = {{
     with col_dl2:
         st.download_button(label=t["t5_dl_json"], data=json_str, file_name="in_silico_model_profile.json", mime="application/json", key="mod_json")
 
+
 # --- ONGLETS ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(t["tabs"])
 
@@ -815,103 +889,232 @@ with tab3:
     st.subheader(t["t3_sub"])
     st.markdown(t["t3_desc"])
 
-    df_work = df.copy()
-    df_work["identity_clean"] = harmonize_identity_series(df_work["known_identity"])
-    df_train = df_work.dropna(subset=["identity_clean"]).copy()
+    model, class_counts, X_train_df, y_train_ser = get_trained_model(df)
+    active_cols = [c for c in FEATURE_COLS if c in df.columns]
 
-    n_classes = df_train["identity_clean"].nunique()
-
-    if len(df_train) < 4 or n_classes < 2:
+    if model is None:
         st.error(t["t3_err"])
     else:
-        imputer_rf = SimpleImputer(strategy="median")
-        X_train = imputer_rf.fit_transform(df_train[FEATURE_COLS])
-        y_train = df_train["identity_clean"]
-
-        rf = RandomForestClassifier(
-            n_estimators=200,
-            random_state=42,
-            class_weight="balanced",
+        # 1. Choix de l'enregistrement à évaluer (unique source pour la prédiction et les z-scores)
+        eval_mode = st.radio(
+            "Enregistrement à évaluer" if lang_choice == "Français" else "Record to evaluate",
+            options=(
+                ["Cellule existante dans la base", "Saisie manuelle"]
+                if lang_choice == "Français"
+                else ["Existing cell in database", "Manual entry"]
+            ),
+            horizontal=True,
+            key="rf_eval_mode",
         )
-        rf.fit(X_train, y_train)
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            rmp = st.number_input(t["t3_rmp"], value=-62.0, step=1.0, key="rf_rmp")
-            tau = st.number_input(t["t3_tau"], value=18.0, step=1.0, key="rf_tau")
-            cm = st.number_input(t["t3_cm"], value=40.0, step=1.0, key="rf_cm")
-        with c2:
-            rheo = st.number_input(t["t3_rheo"], value=45.0, step=5.0, key="rf_rheo")
-            thr = st.number_input(t["t3_thr"], value=-39.0, step=1.0, key="rf_thr")
-            amp = st.number_input(t["t3_amp"], value=75.0, step=1.0, key="rf_amp")
-        with c3:
-            hw = st.number_input(t["t3_hw"], value=1.4, step=0.1, key="rf_hw")
-            ahp_amp = st.number_input(t["t3_ahp_amp"], value=11.0, step=0.5, key="rf_ahp_amp")
-            ahp_dur = st.number_input(t["t3_ahp_dur"], value=45.0, step=2.0, key="rf_ahp_dur")
+        defaults = {
+            "rmp_mv": -62.0,
+            "tau_ms": 18.0,
+            "cm_pf": 40.0,
+            "rheobase_pa": 45.0,
+            "ap_threshold_mv": -39.0,
+            "ap_amplitude_mv": 75.0,
+            "ap_half_width_ms": 1.4,
+            "ahp_amplitude_mv": 11.0,
+            "ahp_duration_ms": 45.0,
+        }
 
-        input_df = pd.DataFrame(
-            [[rmp, tau, cm, rheo, thr, amp, hw, ahp_amp, ahp_dur]],
-            columns=FEATURE_COLS,
+        if eval_mode in ["Cellule existante dans la base", "Existing cell in database"] and not df.empty:
+            cell_options = df["cell_id"].dropna().astype(str).unique().tolist()
+            chosen_id = st.selectbox("cell_id", options=cell_options, key="rf_selected_cell_id")
+            target_row = df.loc[df["cell_id"].astype(str) == chosen_id].iloc[0]
+        else:
+            c1, c2, c3 = st.columns(3)
+            cols_grid = [c1, c2, c3]
+            manual_vals: dict[str, float] = {}
+            for idx, col in enumerate(active_cols):
+                with cols_grid[idx % 3]:
+                    default_val = defaults.get(col, 0.0)
+                    manual_vals[col] = st.number_input(
+                        col,
+                        value=float(default_val),
+                        key=f"rf_num_{col}",
+                    )
+            target_row = pd.Series(manual_vals)
+
+        # 2. Prédiction unique
+        x_one = pd.DataFrame(
+            [{col: pd.to_numeric(target_row.get(col), errors="coerce") for col in X_train_df.columns}]
         )
-        X_input = imputer_rf.transform(input_df)
-
-        proba = rf.predict_proba(X_input)[0]
-        classes = list(rf.classes_)
+        proba = model.predict_proba(x_one)[0]
+        classes = list(model.classes_)
         best_idx = int(np.argmax(proba))
-        prediction_label = classes[best_idx]
-        confidence_pct = float(proba[best_idx]) * 100.0
+        pred_label = classes[best_idx]
+        conf_pct = float(proba[best_idx]) * 100.0
 
-        st.markdown("---")
-        res_col1, res_col2 = st.columns(2)
-        res_col1.success(f"### {t['t3_pred']} : **{prediction_label}**")
-        res_col2.info(f"### {t['t3_conf']} : **{confidence_pct:.1f} %**")
+        st.divider()
+        m_col1, m_col2, m_col3 = st.columns(3)
+        m_col1.success(f"### {t['t3_pred']} : **{pred_label}**")
+        m_col2.info(f"### {t['t3_conf']} : **{conf_pct:.1f} %**")
+        if class_counts is not None and class_counts.min() >= 2:
+            try:
+                cv_res = evaluate_cv(df)
+                m_col3.metric(t["t3_f1_cv"], f"{cv_res.f1_macro:.2f}")
+            except ValueError:
+                m_col3.metric(t["t3_n_single"], len(y_train_ser))
+        else:
+            m_col3.metric(t["t3_n_single"], len(y_train_ser))
 
-        # Graphique des probabilités pour toutes les classes connues
-        proba_df = pd.DataFrame({
-            t["t3_class_col"]: classes,
-            t["t3_proba_col"]: np.round(proba * 100.0, 1),
-        }).sort_values(by=t["t3_proba_col"], ascending=False)
+        # 3. Graphique probabilités + Tableau z-scores côte à côte
+        g_col, z_col = st.columns([1, 1.2])
 
-        fig_proba = px.bar(
-            proba_df,
-            x=t["t3_class_col"],
-            y=t["t3_proba_col"],
-            title=t["t3_proba_chart"],
-        )
-        fig_proba.update_layout(yaxis_range=[0, 100])
-        st.plotly_chart(fig_proba, use_container_width=True)
+        with g_col:
+            proba_df = pd.DataFrame({
+                t["t3_class_col"]: classes,
+                t["t3_proba_col"]: np.round(proba * 100.0, 1),
+            }).sort_values(by=t["t3_proba_col"], ascending=False)
 
-        # Importance des variables
-        imp_df = pd.DataFrame({
-            t["t3_feat_col"]: FEATURE_COLS,
-            t["t3_imp_col"]: rf.feature_importances_,
-        }).sort_values(by=t["t3_imp_col"], ascending=True)
+            fig_proba = px.bar(
+                proba_df,
+                x=t["t3_class_col"],
+                y=t["t3_proba_col"],
+                title=t["t3_proba_chart"],
+            )
+            fig_proba.update_layout(yaxis_range=[0, 100], height=360)
+            st.plotly_chart(fig_proba, use_container_width=True)
 
-        fig_imp = px.bar(
-            imp_df,
-            x=t["t3_imp_col"],
-            y=t["t3_feat_col"],
-            orientation="h",
-            title=t["t3_feat_imp"],
-        )
-        st.plotly_chart(fig_imp, use_container_width=True)
+        with z_col:
+            st.markdown(f"#### {t['t3_z_title']}")
+            z_table = compute_literature_zscores(target_row, df, feature_cols=active_cols)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+            if z_table.empty:
+                st.info(t["t3_z_empty"])
+            else:
+                z_col_name = next(
+                    (c for c in z_table.columns if "z" in c.lower() and "score" in c.lower()),
+                    None,
+                )
+
+                if z_col_name is not None:
+                    plot_df = z_table.copy()
+                    plot_df["_z_num"] = pd.to_numeric(plot_df[z_col_name], errors="coerce")
+                    plot_df = plot_df.dropna(subset=["_z_num"])
+
+                    if not plot_df.empty:
+                        param_candidates = [t["t3_col_param"], "Paramètre", "Parameter", "feature"]
+                        pp_candidates = [t["t3_col_pp"], "Profil / Paramètre", "Profile / Parameter"]
+                        prof_candidates = [t["t3_col_profile"], "Profil", "Profile"]
+
+                        label_col = next((c for c in param_candidates if c in plot_df.columns), None)
+                        if label_col is None:
+                            label_col = next((c for c in pp_candidates if c in plot_df.columns), plot_df.columns[0])
+
+                        prof_col = next((c for c in prof_candidates if c in plot_df.columns), None)
+                        if prof_col is not None and label_col != prof_col:
+                            plot_df["_label"] = (
+                                plot_df[prof_col].astype(str) + " — " + plot_df[label_col].astype(str)
+                            )
+                        else:
+                            plot_df["_label"] = plot_df[label_col].astype(str)
+
+                        out_lbl = t["t3_z_out"]
+                        in_lbl = t["t3_z_in"]
+                        plot_df["_statut"] = np.where(
+                            plot_df["_z_num"].abs() > 2.0,
+                            out_lbl,
+                            in_lbl,
+                        )
+
+                        fig_z = px.bar(
+                            plot_df.sort_values("_z_num", ascending=True),
+                            x="_z_num",
+                            y="_label",
+                            orientation="h",
+                            color="_statut",
+                            color_discrete_map={
+                                out_lbl: "#002FA7",
+                                in_lbl: "#9E9E9E",
+                            },
+                            labels={
+                                "_z_num": t["t3_z_axis_x"],
+                                "_label": "",
+                                "_statut": t["t3_z_status"],
+                            },
+                            title=t["t3_z_chart_title"],
+                            height=300,
+                        )
+                        fig_z.add_vline(x=0, line_width=1.2, line_color="#111111")
+                        fig_z.add_vline(x=2, line_width=1.5, line_dash="dash", line_color="#002FA7")
+                        fig_z.add_vline(x=-2, line_width=1.5, line_dash="dash", line_color="#002FA7")
+                        fig_z.update_layout(
+                            plot_bgcolor="#F4F4F4",
+                            paper_bgcolor="#F4F4F4",
+                            font=dict(color="#111111"),
+                            margin=dict(l=10, r=10, t=40, b=10),
+                        )
+                        st.plotly_chart(fig_z, use_container_width=True)
+
+                    def _highlight_z(val):
+                        try:
+                            num = float(val)
+                        except (TypeError, ValueError):
+                            return ""
+                        if np.isnan(num):
+                            return ""
+                        if abs(num) > 2.0:
+                            return "background-color: #DCE5FF; color: #002FA7; font-weight: 700;"
+                        return ""
+
+                    styled_z = z_table.style.map(_highlight_z, subset=[z_col_name])
+                    st.dataframe(styled_z, hide_index=True, use_container_width=True, height=240)
+                else:
+                    st.dataframe(z_table, hide_index=True, use_container_width=True, height=310)
+
+                z_csv = z_table.to_csv(index=False).encode("utf-8")
+                z_filename = (
+                    f"zscores_{chosen_id}.csv"
+                    if eval_mode in ["Cellule existante dans la base", "Existing cell in database"] and not df.empty
+                    else (
+                        "zscores_saisie_manuelle.csv"
+                        if lang_choice == "Français"
+                        else "zscores_manual_entry.csv"
+                    )
+                )
+                st.download_button(
+                    label=t["t3_z_dl"],
+                    data=z_csv,
+                    file_name=z_filename,
+                    mime="text/csv",
+                    key="rf_zscores_dl_csv",
+                )
+
+        # 4. Importance des variables & métadonnées d'entraînement
+        rf_estimator = model.named_steps.get("clf", model) if hasattr(model, "named_steps") else model
+        if hasattr(rf_estimator, "feature_importances_"):
+            imp_df = pd.DataFrame({
+                t["t3_feat_col"]: list(X_train_df.columns),
+                t["t3_imp_col"]: rf_estimator.feature_importances_,
+            }).sort_values(by=t["t3_imp_col"], ascending=True)
+
+            fig_imp = px.bar(
+                imp_df,
+                x=t["t3_imp_col"],
+                y=t["t3_feat_col"],
+                orientation="h",
+                title=t["t3_feat_imp"],
+                height=340,
+            )
+            st.plotly_chart(fig_imp, use_container_width=True)
+
+        single_cell_df = df[df.get("record_type", "single_cell") == "single_cell"] if "record_type" in df.columns else df
         with st.expander(t["t3_exp"]):
-            class_summary = ", ".join(
-                [f"{k} (n={v})" for k, v in y_train.value_counts().items()]
-            )
+            class_summary = ", ".join([f"{k} (n={v})" for k, v in y_train_ser.value_counts().items()])
+            sources_str = ", ".join(map(str, single_cell_df["source"].dropna().unique().tolist())) if "source" in single_cell_df.columns else "—"
             st.markdown(
-                f"Ce modèle est entraîné sur **{len(df_train)} neurones de référence** "
-                f"[{class_summary}] "
-                f"(sources : {', '.join(map(str, df_train['source'].dropna().unique().tolist()))})."
+                f"Modèle entraîné sur **{len(y_train_ser)} enregistrements `single_cell`** "
+                f"[{class_summary}] (sources : {sources_str})."
             )
-            if "doi" in df_train.columns:
-                train_dois = df_train["doi"].dropna().unique().tolist()
+            if "doi" in single_cell_df.columns:
+                train_dois = single_cell_df["doi"].dropna().unique().tolist()
                 if train_dois:
                     st.markdown("**DOI :**")
                     for d in train_dois:
-                        doi_url = d if d.startswith("http") else f"https://doi.org/{d}"
+                        doi_url = d if str(d).startswith("http") else f"https://doi.org/{d}"
                         st.markdown(f"- [{d}]({doi_url})")
 
 # ==========================================
@@ -1024,11 +1227,65 @@ def insert_new_neuron(
         conn.commit()
     finally:
         conn.close()
+
+def _has_write_access(lang: str) -> bool:
+    try:
+        expected_code = str(st.secrets.get("INSERT_ACCESS_CODE", "")).strip()
+    except Exception:
+        expected_code = ""
+
+    if not expected_code:
+        return True
+
+    if st.session_state.get("t4_write_unlocked", False):
+        return True
+
+    st.info(
+        "L'ajout et la mise à jour de neurones sont protégés par un code d'accès."
+        if lang == "Français"
+        else "Adding and updating neurons is protected by an access code."
+    )
+
+    with st.form("t4_access_form"):
+        entered_code = st.text_input(
+            "Code d'accès contributeur" if lang == "Français" else "Contributor access code",
+            type="password",
+        )
+        unlock_btn = st.form_submit_button(
+            "Déverrouiller" if lang == "Français" else "Unlock"
+        )
+
+    if unlock_btn:
+        if entered_code.strip() == expected_code:
+            st.session_state["t4_write_unlocked"] = True
+            st.rerun()
+        else:
+            st.error(
+                "Code d'accès incorrect."
+                if lang == "Français"
+                else "Incorrect access code."
+            )
+
+    return False
   
 with tab4:
     st.subheader(t["t4_sub"])
     st.markdown(t["t4_desc"])
 
+    if not _has_write_access(lang_choice):
+        st.stop()
+
+    try:
+        if str(st.secrets.get("INSERT_ACCESS_CODE", "")).strip():
+            if st.button(
+                "Verrouiller l'onglet" if lang_choice == "Français" else "Lock tab",
+                key="t4_lock_btn",
+            ):
+                st.session_state["t4_write_unlocked"] = False
+                st.rerun()
+    except Exception:
+        pass
+    
     canonical_ids = get_canonical_identities()
     identity_options = ["Unknown"] + canonical_ids
 
@@ -1040,6 +1297,18 @@ with tab4:
     )
 
     if mode == t["t4_mode_add"]:
+        record_type = st.radio(
+            "Type d'enregistrement",
+            options=["single_cell", "group_summary"],
+            format_func=lambda x: (
+                "Cellule individuelle (single_cell)"
+                if x == "single_cell"
+                else "Moyenne de littérature (group_summary)"
+            ),
+            horizontal=True,
+            key="t4_record_type_radio",
+        )
+
         with st.form("new_neuron_form"):
             f_col1, f_col2, f_col3 = st.columns(3)
             with f_col1:
@@ -1047,6 +1316,7 @@ with tab4:
                 new_source = st.selectbox(
                     t["t4_source"],
                     ["Lab_ULiege", "Literature", "Allen_Institute", "Other"],
+                    index=1 if record_type == "group_summary" else 0,
                 )
                 new_region = st.text_input(t["t4_region"], value="DRN")
             with f_col2:
@@ -1071,6 +1341,31 @@ with tab4:
                 new_ahp_amp = st.number_input(t["t4_ahp_amp"], value=10.0)
                 new_ahp_dur = st.number_input(t["t4_ahp_dur"], value=40.0)
 
+            # Champs supplémentaires uniquement pour les moyennes de littérature
+            if record_type == "group_summary":
+                st.markdown("**Métadonnées & dispersion (littérature)**")
+                l_col1, l_col2, l_col3 = st.columns(3)
+                with l_col1:
+                    new_n_cells = st.number_input("Effectif (n)", min_value=1, value=10, step=1)
+                with l_col2:
+                    new_disp_type = st.selectbox("Type de dispersion", ["SD", "SEM"])
+                with l_col3:
+                    new_doi = st.text_input("DOI / Référence", placeholder="10.1016/...")
+
+                d_col1, d_col2, d_col3 = st.columns(3)
+                with d_col1:
+                    disp_rmp = st.text_input("± RMP (mV)", value="")
+                    disp_tau = st.text_input("± Tau (ms)", value="")
+                    disp_cm = st.text_input("± Cm (pF)", value="")
+                with d_col2:
+                    disp_rheo = st.text_input("± Rhéobase (pA)", value="")
+                    disp_thr = st.text_input("± Seuil PA (mV)", value="")
+                    disp_amp = st.text_input("± Amplitude PA (mV)", value="")
+                with d_col3:
+                    disp_hw = st.text_input("± Demi-largeur PA (ms)", value="")
+                    disp_ahp_amp = st.text_input("± Amplitude AHP (mV)", value="")
+                    disp_ahp_dur = st.text_input("± Durée AHP (ms)", value="")
+
             submitted = st.form_submit_button(t["t4_btn"])
 
             if submitted:
@@ -1084,37 +1379,51 @@ with tab4:
                         harmonized = harmonize_identity_value(new_ident)
                         final_ident = harmonized if harmonized else "Unknown"
 
-                    neuron_values = (
-                        clean_id,
-                        new_source,
-                        new_region.strip() or "DRN",
-                        new_prep,
-                        new_age.strip() or "Unknown",
-                        final_ident,
-                        new_rmp,
-                        new_tau,
-                        new_cm,
-                        new_rheo,
-                        new_thr,
-                        new_amp,
-                        new_hw,
-                        new_ahp_amp,
-                        new_ahp_dur,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    insert_new_neuron(db_path=DB_PATH, values=neuron_values)
-                    st.cache_data.clear()
-                    st.success(t["t4_success"].format(clean_id))
-                    
-                    st.cache_data.clear()
-                    st.success(t["t4_success"].format(clean_id))
+                    def _parse_disp(txt: str) -> float | None:
+                        s = txt.strip()
+                        if not s:
+                            return None
+                        return to_sd(
+                            value=float(s.replace(",", ".")),
+                            dispersion_type=new_disp_type,
+                            n_cells=int(new_n_cells),
+                        )
 
+                    record = {
+                        "cell_id": clean_id,
+                        "source": new_source,
+                        "brain_region": new_region.strip() or "DRN",
+                        "preparation": new_prep,
+                        "age_or_div": new_age.strip() or "Unknown",
+                        "known_identity": final_ident,
+                        "rmp_mv": new_rmp,
+                        "tau_ms": new_tau,
+                        "cm_pf": new_cm,
+                        "rheobase_pa": new_rheo,
+                        "ap_threshold_mv": new_thr,
+                        "ap_amplitude_mv": new_amp,
+                        "ap_half_width_ms": new_hw,
+                        "ahp_amplitude_mv": new_ahp_amp,
+                        "ahp_duration_ms": new_ahp_dur,
+                        "record_type": record_type,
+                        "n_cells": int(new_n_cells) if record_type == "group_summary" else 1,
+                        "dispersion_type": new_disp_type if record_type == "group_summary" else None,
+                        "reference_doi": (new_doi.strip() or None) if record_type == "group_summary" else None,
+                        "rmp_mv_sd": _parse_disp(disp_rmp) if record_type == "group_summary" else None,
+                        "tau_ms_sd": _parse_disp(disp_tau) if record_type == "group_summary" else None,
+                        "cm_pf_sd": _parse_disp(disp_cm) if record_type == "group_summary" else None,
+                        "rheobase_pa_sd": _parse_disp(disp_rheo) if record_type == "group_summary" else None,
+                        "ap_threshold_mv_sd": _parse_disp(disp_thr) if record_type == "group_summary" else None,
+                        "ap_amplitude_mv_sd": _parse_disp(disp_amp) if record_type == "group_summary" else None,
+                        "ap_half_width_ms_sd": _parse_disp(disp_hw) if record_type == "group_summary" else None,
+                        "ahp_amplitude_mv_sd": _parse_disp(disp_ahp_amp) if record_type == "group_summary" else None,
+                        "ahp_duration_ms_sd": _parse_disp(disp_ahp_dur) if record_type == "group_summary" else None,
+                    }
+
+                    insert_neuron_record(db_path=DB_PATH, record=record)
+                    st.cache_data.clear()
+                    st.success(t["t4_success"].format(clean_id))
+    
     else:
         if df.empty or "cell_id" not in df.columns:
             st.info(t["t4_no_cells"])
