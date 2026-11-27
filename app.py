@@ -7,7 +7,7 @@ import numpy as np
 import plotly.express as px
 import psycopg
 import json
-from src.update_neuron import to_sd
+from src.update_neuron import insert_neuron_record, to_sd, update_neuron
 from src.ml_pipeline import (
     FEATURE_COLS,
     build_classifier,
@@ -43,8 +43,8 @@ LANGUAGES = {
             "01 // DATABASE", 
             "02 // ACP", 
             "03 // RANDOM FOREST", 
-            "04 // INSERTION",
-            "05 // MODÉLISATION IN SILICO"
+            "04 // MODÉLISATION IN SILICO",
+            "05 // INSERTION"
         ],
         # --- Onglet 1 ---
         "t1_sub": "Aperçu du jeu de données filtré",
@@ -118,6 +118,30 @@ LANGUAGES = {
         "t4_max_branch_len": "Longueur max. de branche (µm)",
         "t4_crit_radius": "Rayon critique (µm)",
         "t4_sholl": "Intersections de Sholl",
+        "t4_rec_type_label": "Type d'enregistrement",
+        "t4_rec_single": "Cellule individuelle (single_cell)",
+        "t4_rec_group": "Moyenne de littérature (group_summary)",
+        "t4_insert_caption": (
+            "Les champs **cell_id** et **source** sont obligatoires. "
+            "Cochez **Non rapporté** dès qu'une donnée est absente de l'article."
+        ),
+        "t4_meta_sec": "Métadonnées et référence bibliographique",
+        "t4_phys_sec": "Paramètres électrophysiologiques",
+        "t4_lit_sec": "Métadonnées de littérature & dispersion",
+        "t4_disp_sec": "Dispersion associée aux paramètres (± SD ou SEM)",
+        "t4_n_cells_lbl": "Effectif (n_cells)",
+        "t4_disp_na": "Dispersion non rapportée",
+        "t4_disp_type": "Type de dispersion",
+        "t4_ref_doi": "DOI / Référence (reference_doi)",
+        "t4_not_reported": "Non rapporté",
+        "t4_required_ph": "Obligatoire",
+        "t4_err_source": "Le champ **source** est obligatoire.",
+        "t4_mode_delete": "Supprimer un neurone existant",
+        "t4_delete_warn": "La suppression est définitive. Vérifiez l'enregistrement avant confirmation.",
+        "t4_delete_confirm": "Je confirme vouloir supprimer définitivement ce neurone",
+        "t4_delete_btn": "Supprimer définitivement",
+        "t4_delete_err_confirm": "Cochez la case de confirmation avant de supprimer.",
+        "t4_delete_success": "Le neurone '{0}' a été supprimé.",
 
         # --- Onglet 5 (Modélisation) ---
         "t5_header": "Calibrage & Modélisation In Silico (LIF / Hodgkin-Huxley)",
@@ -158,8 +182,8 @@ LANGUAGES = {
             "01 // DATABASE", 
             "02 // PCA", 
             "03 // RANDOM FOREST", 
-            "04 // INSERTION",
-            "05 // IN SILICO MODELING"
+            "04 // IN SILICO MODELING",
+            "05 // INSERTION"
         ],
         # --- Tab 1 ---
         "t1_sub": "Filtered Dataset Overview",
@@ -233,6 +257,31 @@ LANGUAGES = {
         "t4_max_branch_len": "Max branch length (µm)",
         "t4_crit_radius": "Critical radius (µm)",
         "t4_sholl": "Sholl intersections",
+        "t4_rec_type_label": "Record type",
+        "t4_rec_single": "Single cell (single_cell)",
+        "t4_rec_group": "Literature summary (group_summary)",
+        "t4_insert_caption": (
+            "**cell_id** and **source** fields are required. "
+            "Check **Not reported** whenever a value is missing from the paper."
+        ),
+        "t4_meta_sec": "Metadata and bibliographic reference",
+        "t4_phys_sec": "Electrophysiological parameters",
+        "t4_lit_sec": "Literature metadata & dispersion",
+        "t4_disp_sec": "Parameter dispersion (± SD or SEM)",
+        "t4_n_cells_lbl": "Sample size (n_cells)",
+        "t4_disp_na": "Dispersion not reported",
+        "t4_disp_type": "Dispersion type",
+        "t4_ref_doi": "DOI / Reference (reference_doi)",
+        "t4_not_reported": "Not reported",
+        "t4_required_ph": "Required",
+        "t4_err_source": "The **source** field is required.",
+        "t4_mode_delete": "Delete an existing neuron",
+        "t4_delete_warn": "Deletion is permanent. Review the record before confirming.",
+        "t4_delete_confirm": "I confirm that I want to permanently delete this neuron",
+        "t4_delete_btn": "Delete permanently",
+        "t4_delete_err_confirm": "Check the confirmation box before deleting.",
+        "t4_delete_success": "Neuron '{0}' has been deleted.",
+        
         # --- Tab 5 (Modeling) ---
         "t5_header": "In Silico Calibration & Modeling (LIF / Hodgkin-Huxley)",
         "t5_desc": "Extract biophysical parameters validated by literature (native neurons or WT/Mutant expression systems) to build computational models and reduce animal experimentation.",
@@ -298,7 +347,114 @@ RF_TRANSLATIONS = {
         "input_custom_identity": "Or enter another label (will be harmonized)",
     },
 }
+FIELD_LABELS_BY_LANG = {
+    "Français": {
+        "cell_id": "Identifiant cellule (cell_id) *",
+        "source": "Source bibliographique (source) *",
+        "brain_region": "Région cérébrale (brain_region)",
+        "cell_type": "Type / identité cellulaire",
+        "known_identity": "Identité connue (known_identity)",
+        "preparation": "Préparation (preparation)",
+        "age_or_div": "Âge ou DIV (age_or_div)",
+        "species": "Espèce",
+        "n_cells": "Nombre de cellules (n_cells)",
+        "rmp_mv": "RMP (mV)",
+        "tau_ms": "Constante de temps tau (ms)",
+        "cm_pf": "Capacitance membranaire Cm (pF)",
+        "rheobase_pa": "Rhéobase (pA)",
+        "ap_threshold_mv": "Seuil PA (mV)",
+        "ap_amplitude_mv": "Amplitude PA (mV)",
+        "ap_half_width_ms": "Demi-largeur PA (ms)",
+        "ahp_amplitude_mv": "Amplitude AHP (mV)",
+        "ahp_duration_ms": "Durée AHP (ms)",
+    },
+    "English": {
+        "cell_id": "Cell identifier (cell_id) *",
+        "source": "Bibliographic source (source) *",
+        "brain_region": "Brain region (brain_region)",
+        "cell_type": "Cell type / identity",
+        "known_identity": "Known identity (known_identity)",
+        "preparation": "Preparation (preparation)",
+        "age_or_div": "Age or DIV (age_or_div)",
+        "species": "Species",
+        "n_cells": "Number of cells (n_cells)",
+        "rmp_mv": "RMP (mV)",
+        "tau_ms": "Membrane time constant tau (ms)",
+        "cm_pf": "Membrane capacitance Cm (pF)",
+        "rheobase_pa": "Rheobase (pA)",
+        "ap_threshold_mv": "AP threshold (mV)",
+        "ap_amplitude_mv": "AP amplitude (mV)",
+        "ap_half_width_ms": "AP half-width (ms)",
+        "ahp_amplitude_mv": "AHP amplitude (mV)",
+        "ahp_duration_ms": "AHP duration (ms)",
+    },
+}
 
+
+def render_field_with_na(col_name: str, series_dtype, key_prefix: str = "ins", lang: str = "Français"):
+    """Rend un champ adapté au type de colonne avec option 'Non rapporté' / 'Not reported'."""
+    t_local = LANGUAGES.get(lang, LANGUAGES["Français"])
+    labels_map = FIELD_LABELS_BY_LANG.get(lang, FIELD_LABELS_BY_LANG["Français"])
+    label = labels_map.get(col_name, col_name)
+    is_required_no_na = col_name in NON_NA_REQUIRED_COLS
+
+    if is_required_no_na:
+        val = st.text_input(
+            label,
+            placeholder=t_local["t4_required_ph"],
+            key=f"{key_prefix}_{col_name}_txt",
+        ).strip()
+        return val if val else None
+
+    col_input, col_na = st.columns([4, 1.3], vertical_alignment="bottom")
+    not_reported = col_na.checkbox(
+        t_local["t4_not_reported"],
+        value=True if col_name not in {"brain_region"} else False,
+        key=f"{key_prefix}_{col_name}_na",
+    )
+
+    if not_reported:
+        if pd.api.types.is_numeric_dtype(series_dtype) or col_name in FEATURE_COLS:
+            col_input.number_input(
+                label,
+                value=0.0,
+                disabled=True,
+                key=f"{key_prefix}_{col_name}_num_na",
+            )
+        else:
+            col_input.text_input(
+                label,
+                value="",
+                disabled=True,
+                key=f"{key_prefix}_{col_name}_txt_na",
+            )
+        return None
+
+    if pd.api.types.is_integer_dtype(series_dtype) and col_name not in FEATURE_COLS:
+        val = col_input.number_input(
+            label,
+            value=1,
+            step=1,
+            key=f"{key_prefix}_{col_name}_int",
+        )
+        return int(val)
+
+    if pd.api.types.is_float_dtype(series_dtype) or col_name in FEATURE_COLS:
+        val = col_input.number_input(
+            label,
+            value=0.0,
+            step=0.1,
+            format="%.4f",
+            key=f"{key_prefix}_{col_name}_flt",
+        )
+        return float(val)
+
+    val = col_input.text_input(
+        label,
+        value="",
+        key=f"{key_prefix}_{col_name}_str",
+    ).strip()
+    return val if val else None
 
 # Configuration de la page
 st.set_page_config(
@@ -450,6 +606,7 @@ def load_data():
 
 
 df = load_data()
+st.sidebar.caption("Source : Supabase" if _get_supabase_url() else "Source : SQLite local")
 
 # --- Fonctions utilistaires, helpers ---
 @st.cache_resource(show_spinner=False)
@@ -503,9 +660,16 @@ selected_sources = st.sidebar.multiselect(
     default=sources_disponibles
 )
 
+has_region_filter = len(selected_regions) < len(regions_disponibles)
+region_mask = (
+    df['brain_region'].isin(selected_regions)
+    if has_region_filter
+    else (df['brain_region'].isin(selected_regions) | df['brain_region'].isna())
+)
+
 df_filtered = df[
-    (df['brain_region'].isin(selected_regions)) & 
-    (df['source'].isin(selected_sources))
+    region_mask &
+    df['source'].isin(selected_sources)
 ].copy()
 
 st.sidebar.markdown("---")
@@ -666,7 +830,7 @@ def render_modeling_tab(df, t):
     st.subheader(t["t5_sec4"])
     formalism = st.radio(
         t["t5_form"],
-        ["Leaky Integrate-and-Fire (Brian2)", "Hodgkin-Huxley / Courant ionique (Python / NEURON)"],
+        ["Leaky Integrate-and-Fire (Brian2)", "Hodgkin-Huxley / Ion current (Python / NEURON)"],
         horizontal=True,
         key="mod_formalism"
     )
@@ -675,15 +839,15 @@ def render_modeling_tab(df, t):
         refrac = round(ap_hw * 2.0, 2) if ap_hw else 2.0
         code_out = f'''from brian2 import *
 
-# Paramètres extraits de Electrophysiology-database (n = {len(sub_df)})
-# Région : {sel_region} | Préparation : {sel_prep} | Identité : {sel_id}
+# Parameters from Electrophysiology-database (n = {len(sub_df)})
+# Brain area : {sel_region} | Preparation : {sel_prep} | Indentity : {sel_id}
 
-E_L = {E_L} * mV            # Potentiel de repos / fuite
-V_th = {V_th} * mV          # Seuil de déclenchement du PA
-V_reset = {V_reset} * mV    # Potentiel post-spike (V_th - AHP)
-R_in = {R_in} * Mohm        # Résistance d'entrée
-tau_m = {tau_m} * ms        # Constante de temps membranaire
-I_inj = {I_rheo} * pA       # Courant d'injection (Rhéobase médiane)
+E_L = {E_L} * mV            # Resting potential
+V_th = {V_th} * mV          # AP threshold
+V_reset = {V_reset} * mV    # Reset potential
+R_in = {R_in} * Mohm        # Input resistance
+tau_m = {tau_m} * ms        # Membrane time constant
+I_inj = {I_rheo} * pA       # Injection current
 
 eqs = """
 dV/dt = (-(V - E_L) + R_in * I_inj) / tau_m : volt (unless refractory)
@@ -696,14 +860,14 @@ mon = StateMonitor(neuron, 'V', record=True)
 run(500 * ms)
 '''
     else:
-        area_str = f"{soma_area} um^2" if soma_area else "Non renseignée"
+        area_str = f"{soma_area} um^2" if soma_area else "Non specified"
         g_max_val = f"{g_max} * nS" if g_max is not None else "None"
         v_half_val = f"{v_half} * mV" if v_half is not None else "None"
         slope_val = f"{slope_k} * mV" if slope_k is not None else "None"
         gamma_val = f"{gamma_sc} * pS" if gamma_sc is not None else "None"
         ec50_val = f"{ec50_ca} * uM" if ec50_ca is not None else "None"
 
-        code_out = f'''# Paramètres biophysiques & cinétiques pour Hodgkin-Huxley / Courant ionique
+        code_out = f'''# Biophysics and kinetic parameters for Hodgkin-Huxley / Ion current
 # Source : Electrophysiology-database (n = {len(sub_df)})
 
 hh_channel_config = {{
@@ -1118,8 +1282,124 @@ with tab3:
                         st.markdown(f"- [{d}]({doi_url})")
 
 # ==========================================
-# ONGLET 4 : AJOUTER UN NEURONE
+# ONGLET 5 : AJOUTER UN NEURONE
 # ==========================================
+
+NON_NA_REQUIRED_COLS = {"cell_id", "source"}
+AUTO_IGNORED_COLS = {"id", "created_at", "updated_at"}
+
+FIELD_LABELS_BY_LANG = {
+    "Français": {
+        "cell_id": "Identifiant cellule (cell_id) *",
+        "source": "Source bibliographique (source) *",
+        "brain_region": "Région cérébrale (brain_region)",
+        "cell_type": "Type / identité cellulaire",
+        "known_identity": "Identité connue (known_identity)",
+        "preparation": "Préparation (preparation)",
+        "age_or_div": "Âge ou DIV (age_or_div)",
+        "species": "Espèce",
+        "n_cells": "Nombre de cellules (n_cells)",
+        "reference_doi": "DOI / Référence (reference_doi)",
+        "rmp_mv": "RMP (mV)",
+        "tau_ms": "Constante de temps tau (ms)",
+        "cm_pf": "Capacitance membranaire Cm (pF)",
+        "rheobase_pa": "Rhéobase (pA)",
+        "ap_threshold_mv": "Seuil PA (mV)",
+        "ap_amplitude_mv": "Amplitude PA (mV)",
+        "ap_half_width_ms": "Demi-largeur PA (ms)",
+        "ahp_amplitude_mv": "Amplitude AHP (mV)",
+        "ahp_duration_ms": "Durée AHP (ms)",
+    },
+    "English": {
+        "cell_id": "Cell identifier (cell_id) *",
+        "source": "Bibliographic source (source) *",
+        "brain_region": "Brain region (brain_region)",
+        "cell_type": "Cell type / identity",
+        "known_identity": "Known identity (known_identity)",
+        "preparation": "Preparation (preparation)",
+        "age_or_div": "Age or DIV (age_or_div)",
+        "species": "Species",
+        "n_cells": "Number of cells (n_cells)",
+        "reference_doi": "DOI / Reference (reference_doi)",
+        "rmp_mv": "RMP (mV)",
+        "tau_ms": "Membrane time constant tau (ms)",
+        "cm_pf": "Membrane capacitance Cm (pF)",
+        "rheobase_pa": "Rheobase (pA)",
+        "ap_threshold_mv": "AP threshold (mV)",
+        "ap_amplitude_mv": "AP amplitude (mV)",
+        "ap_half_width_ms": "AP half-width (ms)",
+        "ahp_amplitude_mv": "AHP amplitude (mV)",
+        "ahp_duration_ms": "AHP duration (ms)",
+    },
+}
+
+
+def render_field_with_na(col_name: str, series_dtype, key_prefix: str = "ins", lang: str = "Français"):
+    """Rend un champ adapté au type de colonne avec option 'Non rapporté' / 'Not reported'."""
+    t_local = LANGUAGES.get(lang, LANGUAGES["Français"])
+    labels_map = FIELD_LABELS_BY_LANG.get(lang, FIELD_LABELS_BY_LANG["Français"])
+    label = labels_map.get(col_name, col_name)
+    is_required_no_na = col_name in NON_NA_REQUIRED_COLS
+
+    if is_required_no_na:
+        val = st.text_input(
+            label,
+            placeholder=t_local["t4_required_ph"],
+            key=f"{key_prefix}_{col_name}_txt",
+        ).strip()
+        return val if val else None
+
+    col_input, col_na = st.columns([4, 1.3], vertical_alignment="bottom")
+    not_reported = col_na.checkbox(
+        t_local["t4_not_reported"],
+        value=True if col_name not in {"brain_region"} else False,
+        key=f"{key_prefix}_{col_name}_na",
+    )
+
+    if not_reported:
+        if pd.api.types.is_numeric_dtype(series_dtype) or col_name in FEATURE_COLS:
+            col_input.number_input(
+                label,
+                value=0.0,
+                disabled=True,
+                key=f"{key_prefix}_{col_name}_num_na",
+            )
+        else:
+            col_input.text_input(
+                label,
+                value="",
+                disabled=True,
+                key=f"{key_prefix}_{col_name}_txt_na",
+            )
+        return None
+
+    if pd.api.types.is_integer_dtype(series_dtype) and col_name not in FEATURE_COLS:
+        val = col_input.number_input(
+            label,
+            value=1,
+            step=1,
+            key=f"{key_prefix}_{col_name}_int",
+        )
+        return int(val)
+
+    if pd.api.types.is_float_dtype(series_dtype) or col_name in FEATURE_COLS:
+        val = col_input.number_input(
+            label,
+            value=0.0,
+            step=0.1,
+            format="%.4f",
+            key=f"{key_prefix}_{col_name}_flt",
+        )
+        return float(val)
+
+    val = col_input.text_input(
+        label,
+        value="",
+        key=f"{key_prefix}_{col_name}_str",
+    ).strip()
+    return val if val else None
+
+
 def _get_pg_columns(pg_conn, table_name: str) -> set[str]:
     rows = pg_conn.execute(
         """
@@ -1228,6 +1508,39 @@ def insert_new_neuron(
     finally:
         conn.close()
 
+
+def delete_neuron_by_id(
+    db_path: str,
+    cell_id: str,
+    table_name: str = "neurons_electrophys",
+) -> int:
+    """Supprime un neurone par cell_id (Supabase en priorité, repli sur SQLite)."""
+    db_url = _get_supabase_url()
+    if db_url:
+        try:
+            with psycopg.connect(db_url, connect_timeout=5) as pg_conn:
+                cur = pg_conn.execute(
+                    f"DELETE FROM {table_name} WHERE cell_id = %s",
+                    (cell_id,),
+                )
+                pg_conn.commit()
+                return cur.rowcount
+        except Exception as exc:
+            st.warning(f"Suppression Supabase indisponible ({exc}), repli sur SQLite local.")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DELETE FROM {table_name} WHERE cell_id = ?",
+            (cell_id,),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def _has_write_access(lang: str) -> bool:
     try:
         expected_code = str(st.secrets.get("INSERT_ACCESS_CODE", "")).strip()
@@ -1267,258 +1580,323 @@ def _has_write_access(lang: str) -> bool:
             )
 
     return False
-  
-with tab4:
+
+
+with tab5:
     st.subheader(t["t4_sub"])
     st.markdown(t["t4_desc"])
 
-    if not _has_write_access(lang_choice):
-        st.stop()
+    if _has_write_access(lang_choice):
+        try:
+            if str(st.secrets.get("INSERT_ACCESS_CODE", "")).strip():
+                if st.button(
+                    "Verrouiller l'onglet" if lang_choice == "Français" else "Lock tab",
+                    key="t4_lock_btn",
+                ):
+                    st.session_state["t4_write_unlocked"] = False
+                    st.rerun()
+        except Exception:
+            pass
 
-    try:
-        if str(st.secrets.get("INSERT_ACCESS_CODE", "")).strip():
-            if st.button(
-                "Verrouiller l'onglet" if lang_choice == "Français" else "Lock tab",
-                key="t4_lock_btn",
-            ):
-                st.session_state["t4_write_unlocked"] = False
-                st.rerun()
-    except Exception:
-        pass
-    
-    canonical_ids = get_canonical_identities()
-    identity_options = ["Unknown"] + canonical_ids
+        canonical_ids = get_canonical_identities()
+        identity_options = ["Unknown"] + canonical_ids
 
-    mode = st.radio(
-        t["t4_mode_label"],
-        options=[t["t4_mode_add"], t["t4_mode_update"]],
-        horizontal=True,
-        key="t4_mode_radio",
-    )
-
-    if mode == t["t4_mode_add"]:
-        record_type = st.radio(
-            "Type d'enregistrement",
-            options=["single_cell", "group_summary"],
-            format_func=lambda x: (
-                "Cellule individuelle (single_cell)"
-                if x == "single_cell"
-                else "Moyenne de littérature (group_summary)"
-            ),
+        mode = st.radio(
+            t["t4_mode_label"],
+            options=[t["t4_mode_add"], t["t4_mode_update"], t["t4_mode_delete"]],
             horizontal=True,
-            key="t4_record_type_radio",
+            key="t4_mode_radio",
         )
 
-        with st.form("new_neuron_form"):
-            f_col1, f_col2, f_col3 = st.columns(3)
-            with f_col1:
-                new_id = st.text_input(t["t4_id"])
-                new_source = st.selectbox(
-                    t["t4_source"],
-                    ["Lab_ULiege", "Literature", "Allen_Institute", "Other"],
-                    index=1 if record_type == "group_summary" else 0,
-                )
-                new_region = st.text_input(t["t4_region"], value="DRN")
-            with f_col2:
-                new_prep = st.selectbox(
-                    t["t4_prep"],
-                    ["Acute_Slice", "Organotypic_Slice", "Cell_Culture"],
-                )
-                new_age = st.text_input(t["t4_age"], value="DIV7")
-                new_ident = st.selectbox(t["t4_ident"], identity_options)
-            with f_col3:
-                new_rmp = st.number_input("RMP (mV)", value=-60.0)
-                new_tau = st.number_input("Tau (ms)", value=15.0)
-                new_cm = st.number_input("Cm (pF)", value=35.0)
+        if mode == t["t4_mode_add"]:
+            record_type = st.radio(
+                t["t4_rec_type_label"],
+                options=["single_cell", "group_summary"],
+                format_func=lambda x: t["t4_rec_single"] if x == "single_cell" else t["t4_rec_group"],
+                horizontal=True,
+                key="t4_record_type_radio",
+            )
 
-            f_col4, f_col5 = st.columns(2)
-            with f_col4:
-                new_rheo = st.number_input(t["t4_rheo"], value=40.0)
-                new_thr = st.number_input(t["t4_thr"], value=-40.0)
-                new_amp = st.number_input(t["t4_amp"], value=75.0)
-            with f_col5:
-                new_hw = st.number_input(t["t4_hw"], value=1.2)
-                new_ahp_amp = st.number_input(t["t4_ahp_amp"], value=10.0)
-                new_ahp_dur = st.number_input(t["t4_ahp_dur"], value=40.0)
+            st.caption(t["t4_insert_caption"])
 
-            # Champs supplémentaires uniquement pour les moyennes de littérature
+            excluded_in_form = AUTO_IGNORED_COLS | {
+                "record_type",
+                "n_cells",
+                "dispersion_type",
+                "reference_doi",
+            }
+            sd_cols = [c for c in df.columns if c.endswith("_sd")]
+            excluded_in_form |= set(sd_cols)
+
+            all_cols = [c for c in df.columns if c not in excluded_in_form]
+
+            ordered_cols: list[str] = []
+            for req in ["cell_id", "source"]:
+                if req in all_cols:
+                    ordered_cols.append(req)
+            for c in all_cols:
+                if c not in ordered_cols and c not in FEATURE_COLS:
+                    ordered_cols.append(c)
+            for c in FEATURE_COLS:
+                if c in all_cols and c not in ordered_cols:
+                    ordered_cols.append(c)
+
+            record: dict[str, object] = {
+                "record_type": record_type,
+                "n_cells": 1,
+                "dispersion_type": None,
+                "reference_doi": None,
+            }
+
+            st.markdown(f"#### {t['t4_meta_sec']}")
+            meta_cols = [c for c in ordered_cols if c not in FEATURE_COLS]
+            for idx, col_name in enumerate(meta_cols):
+                if idx % 2 == 0:
+                    c1, c2 = st.columns(2)
+                with (c1 if idx % 2 == 0 else c2):
+                    val = render_field_with_na(
+                        col_name, df[col_name].dtype, key_prefix="add", lang=lang_choice
+                    )
+                    if col_name == "known_identity" and isinstance(val, str):
+                        harmonized = harmonize_identity_value(val)
+                        val = harmonized if harmonized else "Unknown"
+                    record[col_name] = val
+
+            st.markdown(f"#### {t['t4_phys_sec']}")
+            phys_cols = [c for c in ordered_cols if c in FEATURE_COLS]
+            for idx, col_name in enumerate(phys_cols):
+                if idx % 2 == 0:
+                    c1, c2 = st.columns(2)
+                with (c1 if idx % 2 == 0 else c2):
+                    record[col_name] = render_field_with_na(
+                        col_name, df[col_name].dtype, key_prefix="add", lang=lang_choice
+                    )
+
+            for sd_col in sd_cols:
+                record[sd_col] = None
+
             if record_type == "group_summary":
-                st.markdown("**Métadonnées & dispersion (littérature)**")
-                l_col1, l_col2, l_col3 = st.columns(3)
-                with l_col1:
-                    new_n_cells = st.number_input("Effectif (n)", min_value=1, value=10, step=1)
-                with l_col2:
-                    new_disp_type = st.selectbox("Type de dispersion", ["SD", "SEM"])
-                with l_col3:
-                    new_doi = st.text_input("DOI / Référence", placeholder="10.1016/...")
+                st.markdown(f"#### {t['t4_lit_sec']}")
+                g1, g2, g3 = st.columns(3)
+                with g1:
+                    n_cells_val = render_field_with_na(
+                        "n_cells", pd.Series(dtype="int64").dtype, key_prefix="add_grp", lang=lang_choice
+                    )
+                    record["n_cells"] = int(n_cells_val) if n_cells_val is not None else None
+                with g2:
+                    disp_na = st.checkbox(t["t4_disp_na"], value=True, key="add_grp_disp_na")
+                    disp_type = st.selectbox(
+                        t["t4_disp_type"],
+                        ["SD", "SEM"],
+                        disabled=disp_na,
+                        key="add_grp_disp_type",
+                    )
+                    record["dispersion_type"] = None if disp_na else disp_type
+                with g3:
+                    doi_val = render_field_with_na(
+                        "reference_doi", pd.Series(dtype="object").dtype, key_prefix="add_grp", lang=lang_choice
+                    )
+                    record["reference_doi"] = doi_val
 
-                d_col1, d_col2, d_col3 = st.columns(3)
-                with d_col1:
-                    disp_rmp = st.text_input("± RMP (mV)", value="")
-                    disp_tau = st.text_input("± Tau (ms)", value="")
-                    disp_cm = st.text_input("± Cm (pF)", value="")
-                with d_col2:
-                    disp_rheo = st.text_input("± Rhéobase (pA)", value="")
-                    disp_thr = st.text_input("± Seuil PA (mV)", value="")
-                    disp_amp = st.text_input("± Amplitude PA (mV)", value="")
-                with d_col3:
-                    disp_hw = st.text_input("± Demi-largeur PA (ms)", value="")
-                    disp_ahp_amp = st.text_input("± Amplitude AHP (mV)", value="")
-                    disp_ahp_dur = st.text_input("± Durée AHP (ms)", value="")
+                if sd_cols:
+                    st.markdown(f"#### {t['t4_disp_sec']}")
+                    for idx, sd_col in enumerate(sd_cols):
+                        if idx % 2 == 0:
+                            s1, s2 = st.columns(2)
+                        with (s1 if idx % 2 == 0 else s2):
+                            raw_disp = render_field_with_na(
+                                sd_col, df[sd_col].dtype, key_prefix="add_sd", lang=lang_choice
+                            )
+                            if raw_disp is not None and record["dispersion_type"] is not None:
+                                record[sd_col] = to_sd(
+                                    value=float(raw_disp),
+                                    dispersion_type=record["dispersion_type"],
+                                    n_cells=record["n_cells"],
+                                )
+                            else:
+                                record[sd_col] = raw_disp
 
-            submitted = st.form_submit_button(t["t4_btn"])
+            if st.button(t["t4_btn"], type="primary", key="t4_add_submit_btn"):
+                clean_id = (record.get("cell_id") or "").strip() if isinstance(record.get("cell_id"), str) else ""
+                clean_source = (record.get("source") or "").strip() if isinstance(record.get("source"), str) else ""
 
-            if submitted:
-                clean_id = new_id.strip()
                 if not clean_id:
                     st.error(t["t4_err_id"])
+                elif not clean_source:
+                    st.error(t["t4_err_source"])
                 else:
-                    if new_ident == "Unknown":
-                        final_ident = "Unknown"
-                    else:
-                        harmonized = harmonize_identity_value(new_ident)
-                        final_ident = harmonized if harmonized else "Unknown"
-
-                    def _parse_disp(txt: str) -> float | None:
-                        s = txt.strip()
-                        if not s:
-                            return None
-                        return to_sd(
-                            value=float(s.replace(",", ".")),
-                            dispersion_type=new_disp_type,
-                            n_cells=int(new_n_cells),
-                        )
-
-                    record = {
-                        "cell_id": clean_id,
-                        "source": new_source,
-                        "brain_region": new_region.strip() or "DRN",
-                        "preparation": new_prep,
-                        "age_or_div": new_age.strip() or "Unknown",
-                        "known_identity": final_ident,
-                        "rmp_mv": new_rmp,
-                        "tau_ms": new_tau,
-                        "cm_pf": new_cm,
-                        "rheobase_pa": new_rheo,
-                        "ap_threshold_mv": new_thr,
-                        "ap_amplitude_mv": new_amp,
-                        "ap_half_width_ms": new_hw,
-                        "ahp_amplitude_mv": new_ahp_amp,
-                        "ahp_duration_ms": new_ahp_dur,
-                        "record_type": record_type,
-                        "n_cells": int(new_n_cells) if record_type == "group_summary" else 1,
-                        "dispersion_type": new_disp_type if record_type == "group_summary" else None,
-                        "reference_doi": (new_doi.strip() or None) if record_type == "group_summary" else None,
-                        "rmp_mv_sd": _parse_disp(disp_rmp) if record_type == "group_summary" else None,
-                        "tau_ms_sd": _parse_disp(disp_tau) if record_type == "group_summary" else None,
-                        "cm_pf_sd": _parse_disp(disp_cm) if record_type == "group_summary" else None,
-                        "rheobase_pa_sd": _parse_disp(disp_rheo) if record_type == "group_summary" else None,
-                        "ap_threshold_mv_sd": _parse_disp(disp_thr) if record_type == "group_summary" else None,
-                        "ap_amplitude_mv_sd": _parse_disp(disp_amp) if record_type == "group_summary" else None,
-                        "ap_half_width_ms_sd": _parse_disp(disp_hw) if record_type == "group_summary" else None,
-                        "ahp_amplitude_mv_sd": _parse_disp(disp_ahp_amp) if record_type == "group_summary" else None,
-                        "ahp_duration_ms_sd": _parse_disp(disp_ahp_dur) if record_type == "group_summary" else None,
-                    }
-
+                    record["cell_id"] = clean_id
+                    record["source"] = clean_source
                     insert_neuron_record(db_path=DB_PATH, record=record)
                     st.cache_data.clear()
                     st.success(t["t4_success"].format(clean_id))
-    
-    else:
-        if df.empty or "cell_id" not in df.columns:
-            st.info(t["t4_no_cells"])
-        else:
-            cell_ids = df["cell_id"].dropna().astype(str).unique().tolist()
-            selected_cell = st.selectbox(
-                t["t4_select_cell"],
-                options=cell_ids,
-                key="t4_update_cell_select",
-            )
-            current_row = df[df["cell_id"].astype(str) == selected_cell].iloc[0]
 
-            current_harm = harmonize_identity_value(current_row.get("known_identity"))
-            default_ident = current_harm if current_harm in canonical_ids else "Unknown"
-            ident_idx = identity_options.index(default_ident)
+        elif mode == t["t4_mode_update"]:
+            if df.empty or "cell_id" not in df.columns:
+                st.info(t["t4_no_cells"])
+            else:
+                cell_ids = df["cell_id"].dropna().astype(str).unique().tolist()
+                selected_cell = st.selectbox(
+                    t["t4_select_cell"],
+                    options=cell_ids,
+                    key="t4_update_cell_select",
+                )
+                current_row = df[df["cell_id"].astype(str) == selected_cell].iloc[0]
 
-            with st.form(f"update_neuron_form_{selected_cell}"):
-                u1, u2 = st.columns(2)
-                with u1:
-                    upd_ident = st.selectbox(
-                        t["t4_ident"],
-                        options=identity_options,
-                        index=ident_idx,
-                    )
-                    upd_age = st.text_input(
-                        t["t4_age"],
-                        value="" if pd.isna(current_row.get("age_or_div")) else str(current_row.get("age_or_div")),
-                    )
-                with u2:
-                    upd_rheo_txt = st.text_input(
-                        t["t4_rheo"],
-                        value="" if pd.isna(current_row.get("rheobase_pa")) else str(current_row.get("rheobase_pa")),
-                    )
+                current_harm = harmonize_identity_value(current_row.get("known_identity"))
+                default_ident = current_harm if current_harm in canonical_ids else "Unknown"
+                ident_idx = identity_options.index(default_ident)
 
-                st.markdown(f"**{t['t4_morpho_section']}**")
-                m1, m2, m3 = st.columns(3)
-                with m1:
-                    upd_branches_txt = st.text_input(
-                        t["t4_num_branches"],
-                        value="" if pd.isna(current_row.get("num_branches")) else str(current_row.get("num_branches")),
-                    )
-                    upd_junctions_txt = st.text_input(
-                        t["t4_num_junctions"],
-                        value="" if pd.isna(current_row.get("num_junctions")) else str(current_row.get("num_junctions")),
-                    )
-                with m2:
-                    upd_maxlen_txt = st.text_input(
-                        t["t4_max_branch_len"],
-                        value="" if pd.isna(current_row.get("max_branch_length_um")) else str(current_row.get("max_branch_length_um")),
-                    )
-                    upd_critrad_txt = st.text_input(
-                        t["t4_crit_radius"],
-                        value="" if pd.isna(current_row.get("critical_radius_um")) else str(current_row.get("critical_radius_um")),
-                    )
-                with m3:
-                    upd_sholl_txt = st.text_input(
-                        t["t4_sholl"],
-                        value="" if pd.isna(current_row.get("sholl_intersections")) else str(current_row.get("sholl_intersections")),
-                    )
+                def _initial_str(col_name: str) -> str:
+                    if col_name not in current_row.index:
+                        return ""
+                    val = current_row.get(col_name)
+                    return "" if pd.isna(val) else str(val)
 
-                upd_submitted = st.form_submit_button(t["t4_update_btn"])
+                with st.form(f"update_neuron_form_{selected_cell}"):
+                    u1, u2 = st.columns(2)
+                    with u1:
+                        upd_ident = st.selectbox(
+                            t["t4_ident"],
+                            options=identity_options,
+                            index=ident_idx,
+                        )
+                        upd_age = st.text_input(
+                            t["t4_age"],
+                            value=_initial_str("age_or_div"),
+                        )
+                    with u2:
+                        upd_rheo_txt = st.text_input(
+                            t["t4_rheo"],
+                            value=_initial_str("rheobase_pa"),
+                        )
 
-                if upd_submitted:
-                    def _to_float_or_none(val: str) -> float | None:
-                        s = val.strip()
-                        if not s:
-                            return None
-                        return float(s.replace(",", "."))
+                    st.markdown(f"**{t['t4_morpho_section']}**")
+                    m1, m2, m3 = st.columns(3)
+                    with m1:
+                        upd_branches_txt = st.text_input(
+                            t["t4_num_branches"],
+                            value=_initial_str("num_branches"),
+                        )
+                        upd_junctions_txt = st.text_input(
+                            t["t4_num_junctions"],
+                            value=_initial_str("num_junctions"),
+                        )
+                    with m2:
+                        upd_maxlen_txt = st.text_input(
+                            t["t4_max_branch_len"],
+                            value=_initial_str("max_branch_length_um"),
+                        )
+                        upd_critrad_txt = st.text_input(
+                            t["t4_crit_radius"],
+                            value=_initial_str("critical_radius_um"),
+                        )
+                    with m3:
+                        upd_sholl_txt = st.text_input(
+                            t["t4_sholl"],
+                            value=_initial_str("sholl_intersections"),
+                        )
 
-                    payload: dict[str, object] = {
-                        "known_identity": upd_ident,
-                        "age_or_div": upd_age.strip() if upd_age.strip() else None,
-                        "rheobase_pa": _to_float_or_none(upd_rheo_txt),
-                        "num_branches": _to_float_or_none(upd_branches_txt),
-                        "num_junctions": _to_float_or_none(upd_junctions_txt),
-                        "max_branch_length_um": _to_float_or_none(upd_maxlen_txt),
-                        "critical_radius_um": _to_float_or_none(upd_critrad_txt),
-                        "sholl_intersections": _to_float_or_none(upd_sholl_txt),
-                    }
+                    upd_submitted = st.form_submit_button(t["t4_update_btn"])
 
-                    rows_updated = update_existing_neuron(
-                        db_path=DB_PATH,
-                        cell_id=selected_cell,
-                        updates=payload,
-                    )
-                    st.cache_data.clear()
-                    if rows_updated > 0:
-                        st.success(t["t4_update_success"].format(selected_cell))
+                    if upd_submitted:
+                        def _to_float_or_none(raw_val: str) -> float | None:
+                            s = raw_val.strip()
+                            if not s:
+                                return None
+                            try:
+                                return float(s.replace(",", "."))
+                            except ValueError:
+                                return None
+
+                        clean_age = upd_age.strip()
+                        payload: dict[str, object] = {
+                            "known_identity": None if upd_ident == "Unknown" else upd_ident,
+                            "age_or_div": clean_age if clean_age else None,
+                            "rheobase_pa": _to_float_or_none(upd_rheo_txt),
+                            "num_branches": _to_float_or_none(upd_branches_txt),
+                            "num_junctions": _to_float_or_none(upd_junctions_txt),
+                            "max_branch_length_um": _to_float_or_none(upd_maxlen_txt),
+                            "critical_radius_um": _to_float_or_none(upd_critrad_txt),
+                            "sholl_intersections": _to_float_or_none(upd_sholl_txt),
+                        }
+
+                        non_empty_payload = {
+                            k: v for k, v in payload.items() if v is not None
+                        }
+
+                        rows_updated = update_neuron(
+                            cell_id=selected_cell,
+                            db_path=DB_PATH,
+                            **non_empty_payload,
+                        )
+                        st.cache_data.clear()
+                        if rows_updated > 0:
+                            st.success(t["t4_update_success"].format(selected_cell))
+                            st.rerun()
+                        else:
+                            st.info(t["t4_update_noop"].format(selected_cell))
+
+        elif mode == t["t4_mode_delete"]:
+            if df.empty or "cell_id" not in df.columns:
+                st.info(t["t4_no_cells"])
+            else:
+                st.warning(t["t4_delete_warn"])
+                cell_ids = df["cell_id"].dropna().astype(str).unique().tolist()
+                selected_to_del = st.selectbox(
+                    t["t4_select_cell"],
+                    options=cell_ids,
+                    key="t4_delete_cell_select",
+                )
+
+                preview_cols = [
+                    c
+                    for c in [
+                        "cell_id",
+                        "source",
+                        "brain_region",
+                        "preparation",
+                        "known_identity",
+                        "record_type",
+                    ]
+                    if c in df.columns
+                ]
+                st.dataframe(
+                    df.loc[df["cell_id"].astype(str) == selected_to_del, preview_cols],
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                confirmed = st.checkbox(
+                    t["t4_delete_confirm"],
+                    value=False,
+                    key=f"t4_del_confirm_{selected_to_del}",
+                )
+
+                if st.button(
+                    t["t4_delete_btn"],
+                    type="primary",
+                    disabled=not confirmed,
+                    key="t4_delete_submit_btn",
+                ):
+                    if not confirmed:
+                        st.error(t["t4_delete_err_confirm"])
                     else:
-                        st.info(t["t4_update_noop"].format(selected_cell))
+                        deleted_count = delete_neuron_by_id(
+                            db_path=DB_PATH,
+                            cell_id=selected_to_del,
+                        )
+                        st.cache_data.clear()
+                        if deleted_count > 0:
+                            st.success(t["t4_delete_success"].format(selected_to_del))
+                            st.rerun()
+                        else:
+                            st.info(t["t4_update_noop"].format(selected_to_del))
 
 # ==========================================
-# ONGLET 5 : MODÉLISATION IN SILICO
+# ONGLET 4 : MODÉLISATION IN SILICO
 # ==========================================
-with tab5:
+with tab4:
     render_modeling_tab(df_filtered, t)
 
                 # streamlit run app.py
